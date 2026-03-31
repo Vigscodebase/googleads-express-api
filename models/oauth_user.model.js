@@ -1,46 +1,25 @@
 import mongoose from "mongoose";
-
 const Schema = mongoose.Schema;
 
-// Stores Google OAuth users (people who connected their Google Ads account)
+const accessRoleSchema = new Schema({
+    adminId:   { type: Schema.Types.ObjectId, ref: "admin" },
+    role:      { type: String, enum: ["viewer", "editor", "owner"], default: "viewer" },
+    grantedAt: { type: Date, default: Date.now },
+}, { _id: false });
+
 const oauthUserSchema = new Schema(
     {
-        // A stable unique ID we generate at OAuth callback time
-        userId: {
-            type: String,
-            unique: true,
-        },
-        // Google OAuth tokens
-        access_token: {
-            type: String,
-        },
-        refresh_token: {
-            type: String,
-        },
-        // Google account profile info (fetched at OAuth callback time)
-        googleEmail: {
-            type: String,
-        },
-        googleName: {
-            type: String,
-        },
-        // Google Ads customer IDs accessible by this account (fetched & cached at OAuth time)
-        customerIds: {
-            type: [String],
-            default: [],
-        },
-        // Track when the access token was last refreshed
-        tokenRefreshedAt: {
-            type: Date,
-            default: Date.now,
-        },
+        userId:          { type: String, unique: true },
+        access_token:    { type: String },
+        refresh_token:   { type: String },
+        googleEmail:     { type: String },
+        googleName:      { type: String },
+        customerIds:     { type: [String], default: [] },
+        tokenRefreshedAt:{ type: Date, default: Date.now },
+        // User access roles — which admin users can access this account's data
+        accessRoles:     { type: [accessRoleSchema], default: [] },
     },
-    {
-        timestamps: {
-            createdAt: "created",
-            updatedAt: "updated",
-        },
-    }
+    { timestamps: { createdAt: "created", updatedAt: "updated" } }
 );
 
 export default mongoose.model("oauth_user", oauthUserSchema);

@@ -1,15 +1,16 @@
 import axios from "axios";
 import crypto from "crypto";
 import oauth_user_model from "../models/oauth_user.model.js";
+import admin_model from "../models/admin.model.js";
 
 // ── Token refresh helper ──────────────────────────────────────────────────────
 
 async function refreshAccessToken(oauthUser) {
     const params = new URLSearchParams();
-    params.append("client_id",     process.env.GOOGLE_CLIENT_ID);
+    params.append("client_id", process.env.GOOGLE_CLIENT_ID);
     params.append("client_secret", process.env.GOOGLE_CLIENT_SECRET);
     params.append("refresh_token", oauthUser.refresh_token);
-    params.append("grant_type",    "refresh_token");
+    params.append("grant_type", "refresh_token");
 
     const tokenRes = await axios.post(
         "https://oauth2.googleapis.com/token",
@@ -18,16 +19,12 @@ async function refreshAccessToken(oauthUser) {
     );
 
     const newAccessToken = tokenRes.data.access_token;
-
     await oauth_user_model.updateOne(
         { _id: oauthUser._id },
         { access_token: newAccessToken, tokenRefreshedAt: new Date() }
     );
-
     return newAccessToken;
 }
-
-// ── Helper: fetch customer IDs from Google Ads API ────────────────────────────
 
 async function fetchCustomerIds(accessToken) {
     try {
@@ -35,7 +32,7 @@ async function fetchCustomerIds(accessToken) {
             "https://googleads.googleapis.com/v23/customers:listAccessibleCustomers",
             {
                 headers: {
-                    Authorization:     `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${accessToken}`,
                     "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
                 },
             }
@@ -47,21 +44,29 @@ async function fetchCustomerIds(accessToken) {
     }
 }
 
-// ── Helper: fetch Google profile for an access token ─────────────────────────
-
 async function fetchGoogleProfile(accessToken) {
     try {
         const profileRes = await axios.get(
             "https://www.googleapis.com/oauth2/v2/userinfo",
             { headers: { Authorization: `Bearer ${accessToken}` } }
         );
-        return {
-            email: profileRes.data.email || null,
-            name:  profileRes.data.name  || null,
-        };
+        return { email: profileRes.data.email || null, name: profileRes.data.name || null };
     } catch {
         return { email: null, name: null };
     }
+}
+
+// ── Build GAQL date condition from query params ───────────────────────────────
+// Accepts: dateRange = "LAST_7_DAYS" | "LAST_30_DAYS" | "LAST_90_DAYS" | "TODAY" | "custom"
+//          startDate / endDate = "YYYY-MM-DD" (only when dateRange=custom)
+
+function buildDateCondition(dateRange, startDate, endDate) {
+    if (dateRange === "custom" && startDate && endDate) {
+        return `segments.date BETWEEN '${startDate}' AND '${endDate}'`;
+    }
+    const allowed = ["TODAY", "LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS", "LAST_90_DAYS", "THIS_MONTH", "LAST_MONTH"];
+    const range = allowed.includes(dateRange) ? dateRange : "LAST_30_DAYS";
+    return `segments.date DURING ${range}`;
 }
 
 // ── GET /auth/oauth/callback ──────────────────────────────────────────────────
@@ -69,13 +74,12 @@ async function fetchGoogleProfile(accessToken) {
 export const exchangeShortToken = async (req, res) => {
     try {
         const code = req.query.code;
-
         const params = new URLSearchParams();
-        params.append("code",          code);
-        params.append("client_id",     process.env.GOOGLE_CLIENT_ID);
+        params.append("code", code);
+        params.append("client_id", process.env.GOOGLE_CLIENT_ID);
         params.append("client_secret", process.env.GOOGLE_CLIENT_SECRET);
-        params.append("redirect_uri",  process.env.REDIRECT_URI);
-        params.append("grant_type",    "authorization_code");
+        params.append("redirect_uri", process.env.REDIRECT_URI);
+        params.append("grant_type", "authorization_code");
 
         const tokenRes = await axios.post(
             "https://oauth2.googleapis.com/token",
@@ -86,7 +90,6 @@ export const exchangeShortToken = async (req, res) => {
         const { access_token, refresh_token } = tokenRes.data;
         const userId = "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
 
-        // Fetch Google profile & customer IDs in parallel
         const [profile, customerIds] = await Promise.all([
             fetchGoogleProfile(access_token),
             fetchCustomerIds(access_token),
@@ -105,7 +108,6 @@ export const exchangeShortToken = async (req, res) => {
         }
 
         res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?userId=${userId}`);
-
     } catch (error) {
         console.error("OAuth callback error:", error.response?.data || error.message);
         res.status(500).json({ error: error.response?.data || error.message });
@@ -117,12 +119,9 @@ export const exchangeShortToken = async (req, res) => {
 export const getStaticUser = async (req, res) => {
     try {
         const oauthUser = await oauth_user_model.findOne({}).sort({ created: 1 });
-        if (!oauthUser) {
-            return res.status(404).json({ error: "No OAuth user found. Run init-token.js first." });
-        }
+        if (!oauthUser) return res.status(404).json({ error: "No OAuth user found." });
         res.json({ userId: oauthUser.userId });
     } catch (error) {
-        console.error("getStaticUser error:", error.message);
         res.status(500).json({ error: error.message });
     }
 };
@@ -132,39 +131,52 @@ export const getStaticUser = async (req, res) => {
 export const getCustomerIds = async (req, res) => {
     try {
         const { userId } = req.query;
-
         const oauthUser = await oauth_user_model.findOne({ userId });
         if (!oauthUser) return res.status(404).json({ error: "OAuth user not found." });
 
         const accessToken = await refreshAccessToken(oauthUser);
-
         const customerIds = await fetchCustomerIds(accessToken);
         if (customerIds.length) {
             await oauth_user_model.updateOne({ _id: oauthUser._id }, { customerIds });
         }
-
         res.json({ customerIds: customerIds.length ? customerIds : oauthUser.customerIds });
-
     } catch (error) {
-        console.error("getCustomerIds error:", error.response?.data || error.message);
         res.status(500).json({ error: error.response?.data || error.message });
     }
 };
 
 // ── GET /auth/accounts ────────────────────────────────────────────────────────
-// Returns all connected OAuth accounts for the Account Management page.
-// IMPORTANT: Also returns `userId` so the frontend can show it as a fallback
-// when googleEmail / googleName are null (old records created before those
-// fields existed in the schema).
 
 export const getAccounts = async (req, res) => {
     try {
         const accounts = await oauth_user_model
             .find({})
             .sort({ created: -1 })
-            .select("userId googleEmail googleName customerIds tokenRefreshedAt created updated");
+            .select("userId googleEmail googleName customerIds tokenRefreshedAt created updated accessRoles");
 
-        res.json({ accounts });
+        // Enrich with admin email labels for the access roles
+        const adminIds = [...new Set(
+            accounts.flatMap(a => (a.accessRoles || []).map(r => r.adminId?.toString()))
+                .filter(Boolean)
+        )];
+
+        let adminMap = {};
+        if (adminIds.length) {
+            const admins = await admin_model.find({ _id: { $in: adminIds } }).select("_id email fullname");
+            admins.forEach(adm => { adminMap[adm._id.toString()] = adm; });
+        }
+
+        const enriched = accounts.map(acc => {
+            const a = acc.toObject();
+            a.accessRoles = (a.accessRoles || []).map(r => ({
+                ...r,
+                adminEmail: adminMap[r.adminId?.toString()]?.email || null,
+                adminFullname: adminMap[r.adminId?.toString()]?.fullname || null,
+            }));
+            return a;
+        });
+
+        res.json({ accounts: enriched });
     } catch (error) {
         console.error("getAccounts error:", error.message);
         res.status(500).json({ error: error.message });
@@ -175,51 +187,31 @@ export const getAccounts = async (req, res) => {
 
 export const deleteAccount = async (req, res) => {
     try {
-        const { id } = req.params;
-
-        const deleted = await oauth_user_model.findByIdAndDelete(id);
-        if (!deleted) {
-            return res.status(404).json({ error: "Account not found." });
-        }
-
+        const deleted = await oauth_user_model.findByIdAndDelete(req.params.id);
+        if (!deleted) return res.status(404).json({ error: "Account not found." });
         res.json({ message: "Account removed successfully.", userId: deleted.userId });
     } catch (error) {
-        console.error("deleteAccount error:", error.message);
         res.status(500).json({ error: error.message });
     }
 };
 
 // ── POST /auth/refresh/:id ────────────────────────────────────────────────────
-// Refreshes the access token, re-syncs customerIds, AND back-fills
-// googleEmail / googleName for old records that were created before those
-// fields existed (this is the self-healing migration path).
 
 export const refreshAccountToken = async (req, res) => {
     try {
-        const { id } = req.params;
-
-        const oauthUser = await oauth_user_model.findById(id);
-        if (!oauthUser) {
-            return res.status(404).json({ error: "Account not found." });
-        }
-
-        if (!oauthUser.refresh_token) {
-            return res.status(400).json({ error: "No refresh token stored for this account." });
-        }
+        const oauthUser = await oauth_user_model.findById(req.params.id);
+        if (!oauthUser) return res.status(404).json({ error: "Account not found." });
+        if (!oauthUser.refresh_token) return res.status(400).json({ error: "No refresh token stored." });
 
         const newAccessToken = await refreshAccessToken(oauthUser);
-
-        // Re-sync customer IDs
         const customerIds = await fetchCustomerIds(newAccessToken);
-
-        // Back-fill profile info if missing (migrates old records)
         const updateFields = {};
         if (customerIds.length) updateFields.customerIds = customerIds;
 
         if (!oauthUser.googleEmail || !oauthUser.googleName) {
             const profile = await fetchGoogleProfile(newAccessToken);
             if (profile.email) updateFields.googleEmail = profile.email;
-            if (profile.name)  updateFields.googleName  = profile.name;
+            if (profile.name) updateFields.googleName = profile.name;
         }
 
         if (Object.keys(updateFields).length) {
@@ -228,23 +220,28 @@ export const refreshAccountToken = async (req, res) => {
 
         res.json({ message: "Token refreshed successfully.", userId: oauthUser.userId });
     } catch (error) {
-        console.error("refreshAccountToken error:", error.response?.data || error.message);
         res.status(500).json({ error: error.response?.data || error.message });
     }
 };
 
-// ── GET /auth/ads-listing ─────────────────────────────────────────────────────
+// ── GET /auth/ads-listing — NOW WITH DATE RANGE ───────────────────────────────
+// Query params:
+//   userId, customerId   — required
+//   dateRange            — "LAST_30_DAYS" (default) | "TODAY" | "LAST_7_DAYS" |
+//                          "LAST_14_DAYS" | "LAST_90_DAYS" | "THIS_MONTH" |
+//                          "LAST_MONTH" | "custom"
+//   startDate, endDate   — "YYYY-MM-DD", required when dateRange="custom"
 
 export const getAds = async (req, res) => {
     try {
-        const { userId, customerId } = req.query;
-
+        const { userId, customerId, dateRange, startDate, endDate } = req.query;
         if (!customerId) return res.status(400).json({ error: "customerId is required" });
 
         const oauthUser = await oauth_user_model.findOne({ userId });
         if (!oauthUser) return res.status(404).json({ error: "OAuth user not found." });
 
         const accessToken = await refreshAccessToken(oauthUser);
+        const dateCondition = buildDateCondition(dateRange, startDate, endDate);
 
         const response = await axios.post(
             `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`,
@@ -259,23 +256,133 @@ export const getAds = async (req, res) => {
                         metrics.clicks,
                         metrics.ctr
                     FROM campaign
-                    WHERE segments.date DURING LAST_30_DAYS
+                    WHERE ${dateCondition}
                     ORDER BY metrics.cost_micros DESC
                 `
             },
             {
                 headers: {
-                    Authorization:     `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${accessToken}`,
                     "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
-                    "Content-Type":    "application/json",
+                    "Content-Type": "application/json",
                 },
             }
         );
 
         res.json(response.data);
-
     } catch (error) {
         console.error("getAds error:", error.response?.data || error.message);
         res.status(500).json({ error: error.response?.data || error.message });
+    }
+};
+
+// ══════════════════════════════════════════════════════════════
+//  USER ACCESS ROLE MANAGEMENT
+//  Each oauth_user document has an accessRoles array:
+//  [{ adminId, role, grantedAt }]
+//  Roles: "viewer" | "editor" | "owner"
+// ══════════════════════════════════════════════════════════════
+
+// ── GET /auth/accounts/:id/access — list who has access ──────────────────────
+
+export const getAccountAccess = async (req, res) => {
+    try {
+        const account = await oauth_user_model.findById(req.params.id).select("accessRoles googleEmail userId");
+        if (!account) return res.status(404).json({ error: "Account not found." });
+
+        const roles = account.accessRoles || [];
+        const adminIds = roles.map(r => r.adminId).filter(Boolean);
+        const admins = adminIds.length
+            ? await admin_model.find({ _id: { $in: adminIds } }).select("_id email fullname")
+            : [];
+        const adminMap = {};
+        admins.forEach(a => { adminMap[a._id.toString()] = a; });
+
+        const enriched = roles.map(r => ({
+            adminId: r.adminId,
+            role: r.role,
+            grantedAt: r.grantedAt,
+            adminEmail: adminMap[r.adminId?.toString()]?.email || null,
+            adminFullname: adminMap[r.adminId?.toString()]?.fullname || null,
+        }));
+
+        res.json({ accountId: account._id, accessRoles: enriched });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ── GET /auth/admin-list — all admin users (for the grant-access dropdown) ────
+
+export const getAdminList = async (req, res) => {
+    try {
+        const admins = await admin_model.find({}).select("_id email fullname username");
+        res.json({ admins });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ── POST /auth/accounts/:id/access — grant access ────────────────────────────
+// Body: { adminId, role }   role = "viewer" | "editor" | "owner"
+
+export const grantAccountAccess = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { adminId, role } = req.body;
+
+        if (!adminId || !role) return res.status(400).json({ error: "adminId and role are required." });
+
+        const validRoles = ["viewer", "editor", "owner"];
+        if (!validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(", ")}` });
+
+        // Check admin exists
+        const admin = await admin_model.findById(adminId);
+        if (!admin) return res.status(404).json({ error: "Admin user not found." });
+
+        // Upsert the role (update if already exists, add if not)
+        const account = await oauth_user_model.findById(id);
+        if (!account) return res.status(404).json({ error: "Account not found." });
+
+        const existingIdx = account.accessRoles.findIndex(
+            r => r.adminId?.toString() === adminId.toString()
+        );
+
+        if (existingIdx >= 0) {
+            account.accessRoles[existingIdx].role = role;
+            account.accessRoles[existingIdx].grantedAt = new Date();
+        } else {
+            account.accessRoles.push({ adminId, role, grantedAt: new Date() });
+        }
+
+        await account.save();
+        res.json({ message: `Access granted: ${admin.email} → ${role}`, accessRoles: account.accessRoles });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ── DELETE /auth/accounts/:id/access/:adminId — revoke access ────────────────
+
+export const revokeAccountAccess = async (req, res) => {
+    try {
+        const { id, adminId } = req.params;
+
+        const account = await oauth_user_model.findById(id);
+        if (!account) return res.status(404).json({ error: "Account not found." });
+
+        const before = account.accessRoles.length;
+        account.accessRoles = account.accessRoles.filter(
+            r => r.adminId?.toString() !== adminId.toString()
+        );
+
+        if (account.accessRoles.length === before) {
+            return res.status(404).json({ error: "Access entry not found." });
+        }
+
+        await account.save();
+        res.json({ message: "Access revoked successfully." });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 };
