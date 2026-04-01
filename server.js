@@ -6,6 +6,7 @@ import tokenrout from "./routers/auth.router.js"
 import adrout from "./routers/ad.router.js"
 import loginRout from "./routers/login.router.js"
 import mongoose from "mongoose";
+import role_rout from "./routers/role.js"
 
 dotenv.config({ debug: true });
 
@@ -30,3 +31,4 @@ mongoose.connect("mongodb://127.0.0.1:27017/gads").then(() => {
 app.use("/auth", tokenrout);
 app.use("/ads", adrout);
 app.use("/logincheck", loginRout);
+app.use("/role", role_rout);
