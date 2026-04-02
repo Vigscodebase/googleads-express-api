@@ -12,13 +12,13 @@ async function initializeAdmin() {
         await mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/gads");
         console.log('✅ Connected to MongoDB');
 
-        const email    = 'sanket@clickmatix.com';
+        const email = 'sanket@clickmatix.com';
         const password = 'SuperAdmin@272';
 
         // Check if already exists
         const existing = await Admin.findOne({ email });
         if (existing) {
-            console.log('⚠️  Admin already exists with this email, skipping.');
+            console.log('⚠️ Admin already exists with this email, skipping.');
             await mongoose.connection.close();
             process.exit(0);
         }
@@ -27,9 +27,9 @@ async function initializeAdmin() {
         const hash = await bcrypt.hash(password, SALT_ROUNDS);
 
         const admin = new Admin({
-            fullname: 'Super Admin',
-            username: 'superadmin',
-            email:    email,
+            fullname: 'Sanket Patel',
+            role: "super_admin",
+            email: email,
             password: hash,
             sessions: [],
         });

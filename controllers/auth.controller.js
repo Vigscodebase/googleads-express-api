@@ -1,7 +1,8 @@
 import axios from "axios";
-import crypto from "crypto";
+import bcrypt from "bcrypt";
 import oauth_user_model from "../models/oauth_user.model.js";
 import admin_model from "../models/admin.model.js";
+import role from "../models/role.js"
 
 // ── Token refresh helper ──────────────────────────────────────────────────────
 
@@ -316,8 +317,22 @@ export const getAccountAccess = async (req, res) => {
 
 export const getAdminList = async (req, res) => {
     try {
-        const admins = await admin_model.find({}).select("_id email fullname username");
-        res.json({ admins });
+        const admins = await admin_model.find({}).select("_id email fullname role");
+
+        const final_user = await Promise.all(
+            admins.map(async ({ _id, email, fullname, role: roleSlug }) => {
+                const curr_role = await role.findOne({ role_slug: roleSlug });
+
+                return {
+                    id: _id,
+                    email,
+                    name: fullname,
+                    role: curr_role?.role_name || null
+                };
+            })
+        );
+
+        res.json({ final_user });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -386,3 +401,45 @@ export const revokeAccountAccess = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+export const createUsers = async (req, res) => {
+    try {
+        const { name, email, password, role } = req.body;
+
+        const saltRounds = 10;
+
+        bcrypt.hash(password, saltRounds, async function (err, hash) {
+            const usr_data = new admin_model({
+                fullname: name,
+                email: email,
+                password: hash,
+                role: role,
+            })
+
+            const existingUser = await admin_model.findOne({ email: email });
+
+            if (existingUser) {
+                return res.status(400).json({
+                    message: "User already exists"
+                });
+            }
+
+            const save_usr_acc = usr_data.save();
+
+            if (save_usr_acc) {
+                return res.status(201).json({
+                    success: "New user created successfully."
+                })
+
+            }
+            else {
+                return res.status(400).json({
+                    message: 'Something went wrong!'
+                })
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+}

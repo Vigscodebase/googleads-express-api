@@ -11,6 +11,7 @@ import {
     getAdminList,
     grantAccountAccess,
     revokeAccountAccess,
+    createUsers,
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -36,5 +37,8 @@ tokenrout.get("/admin-list", requireLogin, getAdminList);
 tokenrout.get("/accounts/:id/access", requireLogin, getAccountAccess);
 tokenrout.post("/accounts/:id/access", requireLogin, jsonParser, grantAccountAccess);
 tokenrout.delete("/accounts/:id/access/:adminId", requireLogin, revokeAccountAccess);
+
+//User Add
+tokenrout.post("/create-user", requireLogin, jsonParser, createUsers);
 
 export default tokenrout;

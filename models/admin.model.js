@@ -8,15 +8,17 @@ const adminSchema = new Schema(
         fullname: {
             type: String,
         },
-        username: {
-            type: String,
-        },
         email: {
             type: String,
             unique: true,
         },
         password: {
             type: String,  // bcrypt hashed
+        },
+        role: {
+            type: String,
+            enum: ['super_admin', 'user'],
+            default: 'user'
         },
         // Active session tokens for this admin user
         sessions: [
