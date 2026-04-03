@@ -12,6 +12,9 @@ import {
     grantAccountAccess,
     revokeAccountAccess,
     createUsers,
+    updateUsr,
+    getSingleUser,
+    deletUser,
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -38,7 +41,10 @@ tokenrout.get("/accounts/:id/access", requireLogin, getAccountAccess);
 tokenrout.post("/accounts/:id/access", requireLogin, jsonParser, grantAccountAccess);
 tokenrout.delete("/accounts/:id/access/:adminId", requireLogin, revokeAccountAccess);
 
-//User Add
+//User CRUD
+tokenrout.get("/single-user/:usr_ID", requireLogin, getSingleUser)
 tokenrout.post("/create-user", requireLogin, jsonParser, createUsers);
+tokenrout.patch("/update-single-user/:usr_ID", jsonParser, updateUsr);
+tokenrout.delete("/delete-user/:usr_ID", deletUser);
 
 export default tokenrout;

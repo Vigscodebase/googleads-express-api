@@ -1,8 +1,9 @@
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 import admin_model from "../models/admin.model.js";
+import jwt from "jsonwebtoken";
 
-const SALT_ROUNDS    = 10;
+const SALT_ROUNDS = 10;
 const SESSION_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 function generateToken() {
@@ -17,7 +18,7 @@ export async function requireLogin(req, res, next) {
 
     try {
         const admin = await admin_model.findOne({ "sessions.token": token });
-        if (!admin)  return res.status(401).json({ error: "Invalid or expired session" });
+        if (!admin) return res.status(401).json({ error: "Invalid or expired session" });
 
         const session = admin.sessions.find(s => s.token === token);
         if (Date.now() - new Date(session.createdAt).getTime() > SESSION_AGE_MS) {
@@ -25,7 +26,7 @@ export async function requireLogin(req, res, next) {
             return res.status(401).json({ error: "Session expired, please log in again" });
         }
 
-        req.sessionUser  = admin.email;
+        req.sessionUser = admin.email;
         req.sessionAdmin = admin;
         next();
 
@@ -65,12 +66,13 @@ export const login = async (req, res) => {
         if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
 
         const admin = await admin_model.findOne({ email });
-        if (!admin)  return res.status(401).json({ error: "Invalid email or password" });
+        if (!admin) return res.status(401).json({ error: "Invalid email or password" });
 
         const match = bcrypt.compareSync(password, admin.password);
-        if (!match)  return res.status(401).json({ error: "Invalid email or password" });
+        if (!match) return res.status(401).json({ error: "Invalid email or password" });
 
-        const token = generateToken();
+        // const token = generateToken();
+        const token = jwt.sign({ email: admin.email, role: admin.role }, "test", { expiresIn: "2h" })
         await admin_model.updateOne(
             { _id: admin._id },
             { $push: { sessions: { token, createdAt: new Date() } } }

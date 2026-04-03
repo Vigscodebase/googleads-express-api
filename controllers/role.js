@@ -30,3 +30,27 @@ export const fetchrole = async (req, res) => {
         })
     }
 }
+
+export const getSingleRole = async (req, res) => {
+    try {
+
+        const role_name = req.params.role_name;
+        const sing_role = await role.findOne({ role_name: role_name })
+
+        if (sing_role) {
+            res.status(200).json({
+                data: sing_role,
+                message: "Single role fetched successfully"
+            })
+        }
+        else {
+            res.status(400).json({
+                message: 'Something went wrong!'
+            })
+        }
+    } catch (error) {
+        res.status(500).json({
+            message: error.message
+        })
+    }
+}

@@ -443,3 +443,116 @@ export const createUsers = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 }
+
+export const updateUsr = async (req, res) => {
+    try {
+        const user_ID = req.params.usr_ID;
+        const { name, email, password, role } = req.body;
+        console.log(updateUsr)
+        const saltRounds = 10;
+
+        if (password === undefined || password === null) {
+
+            const edit_usr = await admin_model.updateOne(
+                { _id: user_ID },
+                {
+                    $set: {
+                        fullname: name,
+                        email: email,
+                        role: role,
+                    }
+                }
+            );
+
+            if (edit_usr.acknowledged) {
+                res.status(200).json({
+                    message: "Updated user successfully"
+                })
+            } else {
+                res.status(400).json({
+                    message: 'Something went wrong!'
+                })
+            }
+
+
+        } else {
+
+            bcrypt.hash(password, saltRounds, async function (err, hash) {
+                const edit_usr = await admin_model.updateOne(
+                    { _id: user_ID },
+                    {
+                        $set: {
+                            email: email,
+                            fullname: name,
+                            password: hash,
+                            role: role,
+                        }
+                    }
+                );
+
+                if (edit_usr.acknowledged) {
+                    res.status(200).json({
+                        message: "Updated user successfully"
+                    })
+                } else {
+                    res.status(400).json({
+                        message: 'Something went wrong!'
+                    })
+                }
+            });
+
+        }
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+}
+
+export const getSingleUser = async (req, res) => {
+    try {
+
+        const usr_ID = req.params.usr_ID;
+        const sing_usr = await admin_model.findOne({ _id: usr_ID })
+
+        if (sing_usr) {
+            res.status(200).json({
+                data: sing_usr,
+                message: "Single user fetched successfully"
+            })
+        }
+        else {
+            console.log(res)
+            res.status(400).json({
+                message: 'Something went wrong!'
+            })
+        }
+    } catch (error) {
+        res.status(500).json({
+            message: error.message
+        })
+    }
+}
+
+export const deletUser = async (req, res) => {
+    try {
+
+        const usr_ID = req.params.usr_ID;
+        const delete_usr = await admin_model.deleteOne({ _id: usr_ID })
+
+        if (delete_usr.acknowledged) {
+            res.status(201).json({
+                message: "User deleted successfully"
+            })
+        }
+        else {
+            console.log(res)
+            res.status(400).json({
+                message: 'Something went wrong!'
+            })
+        }
+    } catch (error) {
+        res.status(500).json({
+            message: error.message
+        })
+    }
+}
