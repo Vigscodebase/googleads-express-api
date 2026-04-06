@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import oauth_user_model from "../models/oauth_user.model.js";
 import admin_model from "../models/admin.model.js";
 import role from "../models/role.js"
+import crypto from "crypto";
 
 // ── Token refresh helper ──────────────────────────────────────────────────────
 
@@ -12,7 +13,6 @@ async function refreshAccessToken(oauthUser) {
     params.append("client_secret", process.env.GOOGLE_CLIENT_SECRET);
     params.append("refresh_token", oauthUser.refresh_token);
     params.append("grant_type", "refresh_token");
-
     const tokenRes = await axios.post(
         "https://oauth2.googleapis.com/token",
         params,
@@ -45,16 +45,29 @@ async function fetchCustomerIds(accessToken) {
     }
 }
 
+// async function fetchGoogleProfile(accessToken) {
+//     try {
+//         const profileRes = await axios.get(
+//             "https://www.googleapis.com/oauth2/v2/userinfo",
+//             { headers: { Authorization: `Bearer ${accessToken}` } }
+//         );
+//         return { email: profileRes.data.email || null, name: profileRes.data.name || null };
+//     } catch {
+//         return { email: null, name: null };
+//     }
+// }
+
 async function fetchGoogleProfile(accessToken) {
-    try {
-        const profileRes = await axios.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        return { email: profileRes.data.email || null, name: profileRes.data.name || null };
-    } catch {
-        return { email: null, name: null };
-    }
+    const res = await axios.get(
+        "https://www.googleapis.com/oauth2/v2/userinfo",
+        {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+            },
+        }
+    );
+
+    return res.data;
 }
 
 // ── Build GAQL date condition from query params ───────────────────────────────
@@ -448,7 +461,6 @@ export const updateUsr = async (req, res) => {
     try {
         const user_ID = req.params.usr_ID;
         const { name, email, password, role } = req.body;
-        console.log(updateUsr)
         const saltRounds = 10;
 
         if (password === undefined || password === null) {
@@ -521,7 +533,6 @@ export const getSingleUser = async (req, res) => {
             })
         }
         else {
-            console.log(res)
             res.status(400).json({
                 message: 'Something went wrong!'
             })
@@ -545,7 +556,6 @@ export const deletUser = async (req, res) => {
             })
         }
         else {
-            console.log(res)
             res.status(400).json({
                 message: 'Something went wrong!'
             })

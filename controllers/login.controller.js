@@ -1,14 +1,9 @@
-import crypto from "crypto";
 import bcrypt from "bcrypt";
 import admin_model from "../models/admin.model.js";
 import jwt from "jsonwebtoken";
 
 const SALT_ROUNDS = 10;
-const SESSION_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours
-
-function generateToken() {
-    return crypto.randomBytes(32).toString("hex");
-}
+const SESSION_AGE_MS = 30 * 60 * 1000 //half an hour
 
 // ── Middleware: protect routes ────────────────────────────────────────────────
 
