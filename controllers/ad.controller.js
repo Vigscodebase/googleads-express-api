@@ -13,15 +13,15 @@ export const getAds = async (req, res) => {
         }
 
         const response = await axios.post(
-            `https://googleads.googleapis.com/v16/customers/${customerId}/googleAds:search`,
+            `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`,
             {
-                query: `SELECT campaign.id, campaign.name, campaign.status, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.ctr, metrics.conversions_value FROM campaign WHERE segments.date DURING ${activeDateRange}`
+                query: `SELECT campaign.id, campaign.name, campaign.status, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.ctr, metrics.conversions_value FROM campaign`
                 // query: "SELECT campaign.id, campaign.name, campaign.status, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.ctr, metrics.conversions, metrics.conversions_value FROM campaign"
             },
             {
                 headers: {
                     Authorization: `Bearer ${user.access_token}`,
-                    "developer-token": DEVELOPER_TOKEN,
+                    "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
                     "login-customer-id": userId
                 }
             }
@@ -109,3 +109,27 @@ export const getAds = async (req, res) => {
 //         });
 //     }
 // };
+
+export const getIntegratedReport = async (req, res) => {
+    try {
+
+        const response = await axios.post(
+            `https://business.newsbreak.com/business-api/v1/reports/getIntegratedReport`,
+            {
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Access-Token": "fd5612fb-6c28-4f7c-8d33-0aca932a9b6d",
+                }
+            }
+        );
+
+        res.json(response.data);
+
+    } catch (error) {
+        console.error("Integrated Report:", error.response?.data || error.message);
+        res.status(500).json({
+            error: error.response?.data || error.message,
+        })
+    }
+}
