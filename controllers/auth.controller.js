@@ -221,9 +221,11 @@ export const refreshAccountToken = async (req, res) => {
         const customerIds = await fetchCustomerIds(newAccessToken);
         const updateFields = {};
         if (customerIds.length) updateFields.customerIds = customerIds;
-
+        const profile = await fetchGoogleProfile(newAccessToken);
+        console.log(profile)
         if (!oauthUser.googleEmail || !oauthUser.googleName) {
             const profile = await fetchGoogleProfile(newAccessToken);
+            console.log(profile)
             if (profile.email) updateFields.googleEmail = profile.email;
             if (profile.name) updateFields.googleName = profile.name;
         }
@@ -282,6 +284,24 @@ export const getAds = async (req, res) => {
                 },
             }
         );
+
+        //         const response = await axios.get(
+        //             `https://googleads.googleapis.com/v23/customers:listAccessibleCustomers`,
+        //             {
+        //                 query: `
+        // SELECT customer_client_link.client_customer, customer_client_link.status FROM
+        //     customer_client_link WHERE customer_client_link.status = ACTIVE
+        //     `
+        //             },
+        //             {
+        //                 headers: {
+        //                     Authorization: `Bearer ${accessToken}`,
+        //                     "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
+        //                     "Content-Type": "application/json",
+        //                 },
+        //             }
+        //         );
+        console.log(response.data)
 
         res.json(response.data);
     } catch (error) {
