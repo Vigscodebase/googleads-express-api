@@ -15,6 +15,8 @@ import {
     updateUsr,
     getSingleUser,
     deletUser,
+    getCampaignDetails,
+    updateCampaign,
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -46,5 +48,8 @@ tokenrout.get("/single-user/:usr_ID", requireLogin, getSingleUser)
 tokenrout.post("/create-user", requireLogin, jsonParser, createUsers);
 tokenrout.patch("/update-single-user/:usr_ID", jsonParser, updateUsr);
 tokenrout.delete("/delete-user/:usr_ID", deletUser);
+
+tokenrout.get("/single-campaign/", requireLogin, getCampaignDetails);
+tokenrout.post("/update-campaign/:campaignId", requireLogin, jsonParser, updateCampaign);
 
 export default tokenrout;

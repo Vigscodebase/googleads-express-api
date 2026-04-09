@@ -270,7 +270,8 @@ export const getAds = async (req, res) => {
                         metrics.cost_micros,
                         metrics.impressions,
                         metrics.clicks,
-                        metrics.ctr
+                        metrics.ctr,
+                        metrics.conversions_value
                     FROM campaign
                     WHERE ${dateCondition}
                     ORDER BY metrics.cost_micros DESC
@@ -284,24 +285,6 @@ export const getAds = async (req, res) => {
                 },
             }
         );
-
-        //         const response = await axios.get(
-        //             `https://googleads.googleapis.com/v23/customers:listAccessibleCustomers`,
-        //             {
-        //                 query: `
-        // SELECT customer_client_link.client_customer, customer_client_link.status FROM
-        //     customer_client_link WHERE customer_client_link.status = ACTIVE
-        //     `
-        //             },
-        //             {
-        //                 headers: {
-        //                     Authorization: `Bearer ${accessToken}`,
-        //                     "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
-        //                     "Content-Type": "application/json",
-        //                 },
-        //             }
-        //         );
-        console.log(response.data)
 
         res.json(response.data);
     } catch (error) {
@@ -586,3 +569,71 @@ export const deletUser = async (req, res) => {
         })
     }
 }
+
+export const getCampaignDetails = async (req, res) => {
+    try {
+        const { campaignId, customerId, userId } = req.query;
+
+        const oauthUser = await oauth_user_model.findOne({ userId });
+        const accessToken = await refreshAccessToken(oauthUser);
+
+        const response = await axios.post(
+            `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`,
+            {
+                query: `
+                    SELECT
+                        campaign.id,
+                        campaign.name,
+                        campaign.status,
+                        campaign_budget.amount_micros
+                    FROM campaign
+                    WHERE campaign.id = ${campaignId}
+                `
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
+                },
+            }
+        );
+        console.log(response.data)
+        res.json(response.data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+export const updateCampaign = async (req, res) => {
+    try {
+        const { campaignId, status, userId, customerId } = req.body;
+
+        const oauthUser = await oauth_user_model.findOne({ userId });
+        const accessToken = await refreshAccessToken(oauthUser);
+
+        await axios.post(
+            `https://googleads.googleapis.com/v23/customers/${customerId}/campaigns:mutate`,
+            {
+                operations: [
+                    {
+                        update: {
+                            resourceName: `customers/${customerId}/campaigns/${campaignId}`,
+                            status: status
+                        },
+                        updateMask: "status"
+                    }
+                ]
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
+                },
+            }
+        );
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
