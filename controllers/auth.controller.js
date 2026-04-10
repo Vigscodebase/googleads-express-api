@@ -83,6 +83,37 @@ function buildDateCondition(dateRange, startDate, endDate) {
     return `segments.date DURING ${range}`;
 }
 
+async function handleGoogleOAuthSuccess(profile) {
+    try {
+        const adminEmail = profile.email;
+
+        // Step 1: find oauth user
+        const oauthUser = await oauth_user_model.findOne({
+            googleEmail: adminEmail
+        });
+
+        if (!oauthUser) {
+            console.log("❌ No oauth user found");
+            return;
+        }
+
+        // Step 2: attach to admin (append safely)
+        await admin_model.updateOne(
+            { email: adminEmail },
+            {
+                $addToSet: {
+                    oauthUserIds: oauthUser.userId
+                }
+            }
+        );
+
+        console.log("✅ OAuth user linked successfully");
+
+    } catch (err) {
+        console.error(err);
+    }
+}
+
 // ── GET /auth/oauth/callback ──────────────────────────────────────────────────
 
 export const exchangeShortToken = async (req, res) => {
@@ -108,6 +139,8 @@ export const exchangeShortToken = async (req, res) => {
             fetchGoogleProfile(access_token),
             fetchCustomerIds(access_token),
         ]);
+
+        handleGoogleOAuthSuccess(profile)
 
         const { email: googleEmail, name: googleName } = profile;
 
@@ -636,4 +669,81 @@ export const updateCampaign = async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+};
+
+export const updateAccessAccounts = async (req, res) => {
+    try {
+        const { accounts } = req.body;
+
+        await Admin.findByIdAndUpdate(req.user.id, {
+            access_account: accounts
+        });
+
+        res.json({ success: true });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// GET /api/oauth/list
+export const getOauthUserIds = async (req, res) => {
+    try {
+
+        const admin = await admin_model.findOne({ email: req.sessionAdmin.email });
+        console.log(admin)
+        const oauthUsers = await oauth_user_model.find({
+            userId: { $in: admin.oauthUserIds }
+        });
+
+        res.json({
+            allUserIds: oauthUsers.map(u => u.userId),
+            selectedUserIds: admin.accessUserIds || []
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// POST /api/oauth/add
+export const addAccessUser = async (req, res) => {
+    try {
+        const { userId } = req.body;
+
+        await admin_model.updateOne(
+            { email: req.user.email },
+            {
+                $addToSet: {
+                    accessUserIds: userId   // ✅ add without duplicate
+                }
+            }
+        );
+
+        res.json({ success: true });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// POST /api/oauth/remove
+export const removeAccessUser = async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    await admin_model.updateOne(
+      { email: req.user.email },
+      {
+        $pull: {
+          accessUserIds: userId   // ✅ remove only this
+        }
+      }
+    );
+
+    res.json({ success: true });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };

@@ -17,6 +17,10 @@ import {
     deletUser,
     getCampaignDetails,
     updateCampaign,
+    updateAccessAccounts,
+    getOauthUserIds,
+    addAccessUser,
+    removeAccessUser,
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -51,5 +55,9 @@ tokenrout.delete("/delete-user/:usr_ID", deletUser);
 
 tokenrout.get("/single-campaign/", requireLogin, getCampaignDetails);
 tokenrout.post("/update-campaign/:campaignId", requireLogin, jsonParser, updateCampaign);
+tokenrout.post("/update-access-accounts", requireLogin, jsonParser, updateAccessAccounts);
+tokenrout.get("/oauth/list", requireLogin, getOauthUserIds);
+tokenrout.post("/oauth/add", requireLogin, jsonParser, addAccessUser);
+tokenrout.post("/oauth/remove", requireLogin, jsonParser, removeAccessUser);
 
 export default tokenrout;

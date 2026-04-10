@@ -20,6 +20,14 @@ const adminSchema = new Schema(
             enum: ['super_admin', 'user'],
             default: 'user'
         },
+        oauthUserIds: {
+            type: [String],
+            default: []
+        },
+        accessUserIds: {
+            type: [String],
+            default: []
+        },
         // Active session tokens for this admin user
         sessions: [
             {
