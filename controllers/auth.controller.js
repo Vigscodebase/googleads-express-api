@@ -154,7 +154,7 @@ export const exchangeShortToken = async (req, res) => {
             await new oauth_user_model({ userId, access_token, refresh_token, customerIds }).save();
         }
 
-        res.redirect(`${process.env.FRONTEND_URL}/dashboard.html?userId=${userId}`);
+        res.redirect(`${process.env.FRONTEND_URL}/accountaccess.html?userId=${userId}`);
     } catch (error) {
         console.error("OAuth callback error:", error.response?.data || error.message);
         res.status(500).json({ error: error.response?.data || error.message });
@@ -196,8 +196,18 @@ export const getCustomerIds = async (req, res) => {
 
 export const getAccounts = async (req, res) => {
     try {
+        const { adminEmail } = req.query
+        const userIds = []
+
+        const oauth_user = await admin_model.findOne({ email: adminEmail })
+            .select('oauthUserIds');
+
+        if (oauth_user && oauth_user.oauthUserIds) {
+            userIds.push(...oauth_user.oauthUserIds);
+        }
+
         const accounts = await oauth_user_model
-            .find({})
+            .find({ userId: { $in: userIds } })
             .sort({ created: -1 })
             .select("userId googleEmail googleName customerIds tokenRefreshedAt created updated accessRoles");
 
@@ -630,7 +640,7 @@ export const getCampaignDetails = async (req, res) => {
                 },
             }
         );
-        console.log(response.data)
+
         res.json(response.data);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -691,7 +701,6 @@ export const getOauthUserIds = async (req, res) => {
     try {
 
         const admin = await admin_model.findOne({ email: req.sessionAdmin.email });
-        console.log(admin)
         const oauthUsers = await oauth_user_model.find({
             userId: { $in: admin.oauthUserIds }
         });
@@ -712,7 +721,7 @@ export const addAccessUser = async (req, res) => {
         const { userId } = req.body;
 
         await admin_model.updateOne(
-            { email: req.user.email },
+            { email: req.sessionAdmin.email },
             {
                 $addToSet: {
                     accessUserIds: userId   // ✅ add without duplicate
@@ -729,21 +738,37 @@ export const addAccessUser = async (req, res) => {
 
 // POST /api/oauth/remove
 export const removeAccessUser = async (req, res) => {
-  try {
-    const { userId } = req.body;
+    try {
+        const { userId } = req.body;
 
-    await admin_model.updateOne(
-      { email: req.user.email },
-      {
-        $pull: {
-          accessUserIds: userId   // ✅ remove only this
-        }
-      }
-    );
+        await admin_model.updateOne(
+            { email: req.sessionAdmin.email },
+            {
+                $pull: {
+                    accessUserIds: userId   // ✅ remove only this
+                }
+            }
+        );
 
-    res.json({ success: true });
+        res.json({ success: true });
 
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 };
+
+// GET oauth user name according to userId
+export const getUseridName = async (req, res) => {
+    try {
+        const { userId } = req.query;
+
+        const oauth_user = await oauth_user_model.findOne({ userId: userId })
+            .select('googleName');
+
+        res.json({ data: oauth_user });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
