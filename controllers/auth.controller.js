@@ -200,10 +200,10 @@ export const getAccounts = async (req, res) => {
         const userIds = []
 
         const oauth_user = await admin_model.findOne({ email: adminEmail })
-            .select('oauthUserIds');
+            .select('accessUserIds');
 
-        if (oauth_user && oauth_user.oauthUserIds) {
-            userIds.push(...oauth_user.oauthUserIds);
+        if (oauth_user && oauth_user.accessUserIds) {
+            userIds.push(...oauth_user.accessUserIds);
         }
 
         const accounts = await oauth_user_model
@@ -331,8 +331,20 @@ export const getAds = async (req, res) => {
 
         res.json(response.data);
     } catch (error) {
-        console.error("getAds error:", error.response?.data || error.message);
-        res.status(500).json({ error: error.response?.data || error.message });
+        const error_data = error.response.data.error.details;
+
+        const formattedErrors = error_data.flatMap((detail, i) =>
+            detail.errors?.map((err, j) => ({
+                detailIndex: i,
+                errorIndex: j,
+                error: err
+            })) || []
+        );
+
+        res.status(500).json({
+            message: "Google Ads API Error",
+            errors: formattedErrors
+        });
     }
 };
 
