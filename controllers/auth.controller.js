@@ -711,8 +711,8 @@ export const updateAccessAccounts = async (req, res) => {
 // GET /api/oauth/list
 export const getOauthUserIds = async (req, res) => {
     try {
+        const admin = await admin_model.findById(req.params.userId);
 
-        const admin = await admin_model.findOne({ email: req.sessionAdmin.email });
         const oauthUsers = await oauth_user_model.find({
             userId: { $in: admin.oauthUserIds }
         });
@@ -730,13 +730,13 @@ export const getOauthUserIds = async (req, res) => {
 // POST /api/oauth/add
 export const addAccessUser = async (req, res) => {
     try {
-        const { userId } = req.body;
+        const { userId, adminId } = req.body;
 
         await admin_model.updateOne(
-            { email: req.sessionAdmin.email },
+            { _id: adminId },   // ✅ FIXED
             {
                 $addToSet: {
-                    accessUserIds: userId   // ✅ add without duplicate
+                    accessUserIds: userId
                 }
             }
         );
@@ -751,13 +751,13 @@ export const addAccessUser = async (req, res) => {
 // POST /api/oauth/remove
 export const removeAccessUser = async (req, res) => {
     try {
-        const { userId } = req.body;
+        const { userId, adminId } = req.body;
 
         await admin_model.updateOne(
-            { email: req.sessionAdmin.email },
+            { _id: adminId },   // ✅ FIXED
             {
                 $pull: {
-                    accessUserIds: userId   // ✅ remove only this
+                    accessUserIds: userId
                 }
             }
         );

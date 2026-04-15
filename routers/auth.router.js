@@ -57,7 +57,7 @@ tokenrout.delete("/delete-user/:usr_ID", deletUser);
 tokenrout.get("/single-campaign/", requireLogin, getCampaignDetails);
 tokenrout.post("/update-campaign/:campaignId", requireLogin, jsonParser, updateCampaign);
 tokenrout.post("/update-access-accounts", requireLogin, jsonParser, updateAccessAccounts);
-tokenrout.get("/oauth/list", requireLogin, getOauthUserIds);
+tokenrout.get("/oauth/list/:userId", requireLogin, getOauthUserIds);
 tokenrout.post("/oauth/add", requireLogin, jsonParser, addAccessUser);
 tokenrout.post("/oauth/remove", requireLogin, jsonParser, removeAccessUser);
 tokenrout.get("/get-oauth-name/", requireLogin, getUseridName)
