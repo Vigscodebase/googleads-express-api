@@ -196,7 +196,8 @@ export const getCustomerIds = async (req, res) => {
 
 export const getAccounts = async (req, res) => {
     try {
-        const admin = await admin_model.findById(req.user.id);
+
+        const admin = await admin_model.findById(req.sessionAdmin.id);
 
         let query = {};
 
