@@ -21,7 +21,9 @@ import {
     getOauthUserIds,
     addAccessUser,
     removeAccessUser,
-    getUseridName
+    getUseridName,
+    getAccessMatrix,
+    toggleAccess
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -61,5 +63,7 @@ tokenrout.get("/oauth/list/:userId", requireLogin, getOauthUserIds);
 tokenrout.post("/oauth/add", requireLogin, jsonParser, addAccessUser);
 tokenrout.post("/oauth/remove", requireLogin, jsonParser, removeAccessUser);
 tokenrout.get("/get-oauth-name/", requireLogin, getUseridName)
+tokenrout.get("/access-matrix", requireLogin, getAccessMatrix);
+tokenrout.post("/oauth/toggle-access", requireLogin, jsonParser, toggleAccess);
 
 export default tokenrout;

@@ -196,47 +196,24 @@ export const getCustomerIds = async (req, res) => {
 
 export const getAccounts = async (req, res) => {
     try {
-        const { adminEmail } = req.query
-        const userIds = []
+        const admin = await admin_model.findById(req.user.id);
 
-        const oauth_user = await admin_model.findOne({ email: adminEmail })
-            .select('accessUserIds');
+        let query = {};
 
-        if (oauth_user && oauth_user.accessUserIds) {
-            userIds.push(...oauth_user.accessUserIds);
+        if (admin.role !== "super_admin") {
+            query = {
+                userId: { $in: admin.accessUserIds || [] }
+            };
         }
 
         const accounts = await oauth_user_model
-            .find({ userId: { $in: userIds } })
-            .sort({ created: -1 })
-            .select("userId googleEmail googleName customerIds tokenRefreshedAt created updated accessRoles");
+            .find(query)
+            .sort({ created: -1 });
 
-        // Enrich with admin email labels for the access roles
-        const adminIds = [...new Set(
-            accounts.flatMap(a => (a.accessRoles || []).map(r => r.adminId?.toString()))
-                .filter(Boolean)
-        )];
+        res.json({ accounts });
 
-        let adminMap = {};
-        if (adminIds.length) {
-            const admins = await admin_model.find({ _id: { $in: adminIds } }).select("_id email fullname");
-            admins.forEach(adm => { adminMap[adm._id.toString()] = adm; });
-        }
-
-        const enriched = accounts.map(acc => {
-            const a = acc.toObject();
-            a.accessRoles = (a.accessRoles || []).map(r => ({
-                ...r,
-                adminEmail: adminMap[r.adminId?.toString()]?.email || null,
-                adminFullname: adminMap[r.adminId?.toString()]?.fullname || null,
-            }));
-            return a;
-        });
-
-        res.json({ accounts: enriched });
-    } catch (error) {
-        console.error("getAccounts error:", error.message);
-        res.status(500).json({ error: error.message });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 };
 
@@ -386,6 +363,29 @@ export const getAccountAccess = async (req, res) => {
 
 // ── GET /auth/admin-list — all admin users (for the grant-access dropdown) ────
 
+// export const getAdminList = async (req, res) => {
+//     try {
+//         const admins = await admin_model.find({}).select("_id email fullname role");
+
+//         const final_user = await Promise.all(
+//             admins.map(async ({ _id, email, fullname, role: roleSlug }) => {
+//                 const curr_role = await role.findOne({ role_slug: roleSlug });
+
+//                 return {
+//                     id: _id,
+//                     email,
+//                     name: fullname,
+//                     role: curr_role?.role_name || null
+//                 };
+//             })
+//         );
+
+//         res.json({ final_user });
+//     } catch (error) {
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
 export const getAdminList = async (req, res) => {
     try {
         const admins = await admin_model.find({}).select("_id email fullname role");
@@ -395,15 +395,17 @@ export const getAdminList = async (req, res) => {
                 const curr_role = await role.findOne({ role_slug: roleSlug });
 
                 return {
-                    id: _id,
+                    _id,
                     email,
-                    name: fullname,
+                    fullname,
                     role: curr_role?.role_name || null
                 };
             })
         );
 
-        res.json({ final_user });
+        // ✅ FIXED RESPONSE KEY
+        res.json({ admins: final_user });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -733,12 +735,8 @@ export const addAccessUser = async (req, res) => {
         const { userId, adminId } = req.body;
 
         await admin_model.updateOne(
-            { _id: adminId },   // ✅ FIXED
-            {
-                $addToSet: {
-                    accessUserIds: userId
-                }
-            }
+            { _id: adminId },
+            { $addToSet: { accessUserIds: userId } }
         );
 
         res.json({ success: true });
@@ -754,12 +752,8 @@ export const removeAccessUser = async (req, res) => {
         const { userId, adminId } = req.body;
 
         await admin_model.updateOne(
-            { _id: adminId },   // ✅ FIXED
-            {
-                $pull: {
-                    accessUserIds: userId
-                }
-            }
+            { _id: adminId },
+            { $pull: { accessUserIds: userId } }
         );
 
         res.json({ success: true });
@@ -784,3 +778,68 @@ export const getUseridName = async (req, res) => {
     }
 };
 
+// 🔥 NEW API → Get full matrix (admins + oauth users)
+export const getAccessMatrix = async (req, res) => {
+    try {
+        const admins = await admin_model.find({})
+            .select("_id email fullname accessUserIds role");
+
+        const oauthUsers = await oauth_user_model.find({})
+            .select("userId googleEmail googleName");
+
+        res.json({
+            admins,
+            oauthUsers
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+export const toggleAccess = async (req, res) => {
+    try {
+        const { adminId, userId, enable } = req.body;
+
+        // if (req.user.role !== "super_admin") {
+        //     return res.status(403).json({ error: "Only super admin allowed" });
+        // }
+
+        if (enable) {
+            await admin_model.updateOne(
+                { _id: adminId },
+                { $addToSet: { accessUserIds: userId } }
+            );
+        } else {
+            await admin_model.updateOne(
+                { _id: adminId },
+                { $pull: { accessUserIds: userId } }
+            );
+        }
+
+        res.json({ success: true });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+export const bulkAssignAccess = async (req, res) => {
+    try {
+        const { adminId, userIds } = req.body;
+
+        if (req.user.role !== "super_admin") {
+            return res.status(403).json({ error: "Only super admin allowed" });
+        }
+
+        await admin_model.updateOne(
+            { _id: adminId },
+            { $addToSet: { accessUserIds: { $each: userIds } } }
+        );
+
+        res.json({ success: true });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
