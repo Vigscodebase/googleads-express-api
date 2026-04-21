@@ -133,14 +133,19 @@ export const exchangeShortToken = async (req, res) => {
         );
 
         const { access_token, refresh_token } = tokenRes.data;
-        const userId = "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
+        //const userId = "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
+
+        let existingUser = await oauth_user_model.findOne({ googleEmail: profile.email });
+
+        const userId = existingUser?.userId ||
+            "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
 
         const [profile, customerIds] = await Promise.all([
             fetchGoogleProfile(access_token),
             fetchCustomerIds(access_token),
         ]);
 
-        handleGoogleOAuthSuccess(profile)
+        await handleGoogleOAuthSuccess(profile)
 
         const { email: googleEmail, name: googleName } = profile;
 
@@ -175,20 +180,187 @@ export const getStaticUser = async (req, res) => {
 
 // ── GET /auth/customers ───────────────────────────────────────────────────────
 
+// export const getCustomerIds = async (req, res) => {
+//     try {
+//         const { userId } = req.query;
+//         const oauthUser = await oauth_user_model.findOne({ userId });
+//         if (!oauthUser) return res.status(404).json({ error: "OAuth user not found." });
+
+//         const accessToken = await refreshAccessToken(oauthUser);
+//         const customerIds = await fetchCustomerIds(accessToken);
+//         if (customerIds.length) {
+//             await oauth_user_model.updateOne({ _id: oauthUser._id }, { customerIds });
+//         }
+//         res.json({ customerIds: customerIds.length ? customerIds : oauthUser.customerIds });
+//     } catch (error) {
+//         res.status(500).json({ error: error.response?.data || error.message });
+//     }
+// };
+
+async function fetchCustomerNames(accessToken, loginCustomerId) {
+    try {
+        const query = `
+            SELECT
+                customer_client.id,
+                customer_client.descriptive_name,
+                customer_client.level,
+                customer_client.manager
+            FROM customer_client
+            WHERE customer_client.level <= 1
+        `;
+
+        const response = await axios.post(
+            `https://googleads.googleapis.com/v23/customers/${loginCustomerId}/googleAds:search`,
+            { query },
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
+                    "login-customer-id": loginCustomerId
+                },
+            }
+        );
+
+        return response.data.results.map(r => ({
+            id: r.customerClient.id,
+            name: r.customerClient.descriptiveName || `Customer ${r.customerClient.id}`
+        }));
+
+    } catch (err) {
+        console.warn("fetchCustomerNames error:", err.response?.data || err.message);
+        // ✅ THROW instead of hiding
+        throw err.response?.data || { message: err.message };
+    }
+}
+
 export const getCustomerIds = async (req, res) => {
     try {
         const { userId } = req.query;
+
         const oauthUser = await oauth_user_model.findOne({ userId });
-        if (!oauthUser) return res.status(404).json({ error: "OAuth user not found." });
+        if (!oauthUser) {
+            return res.status(404).json({ error: "OAuth user not found." });
+        }
 
         const accessToken = await refreshAccessToken(oauthUser);
+
+        // Step 1: get customer IDs
         const customerIds = await fetchCustomerIds(accessToken);
-        if (customerIds.length) {
-            await oauth_user_model.updateOne({ _id: oauthUser._id }, { customerIds });
+
+        // fallback if API fails
+        const finalIds = customerIds.length ? customerIds : (oauthUser.customerIds || []);
+
+        if (!finalIds.length) {
+            return res.json({ customers: [] });
         }
-        res.json({ customerIds: customerIds.length ? customerIds : oauthUser.customerIds });
+
+        // Step 2: fetch names
+        //const customers = await fetchCustomerNames(accessToken, finalIds[0]);
+
+        let customers = [];
+
+        for (const cid of finalIds) {
+            try {
+                const list = await fetchCustomerNames(accessToken, cid);
+
+                if (list.length) {
+                    list.forEach(c => {
+                        customers.push({
+                            id: c.id,
+                            name: c.name,
+                            status: "success"
+                        });
+                    });
+                } else {
+                    customers.push({
+                        id: cid,
+                        name: null,
+                        status: "empty"
+                    });
+                }
+
+            } catch (e) {
+                customers.push({
+                    id: cid,
+                    name: null,
+                    status: "error",
+                    error: e?.error?.message || e?.message || "Unknown error"
+                });
+            }
+        }
+
+        // optional: save IDs
+        if (customerIds.length) {
+            await oauth_user_model.updateOne(
+                { _id: oauthUser._id },
+                { customerIds }
+            );
+        }
+
+        res.json({ customers });
+
     } catch (error) {
-        res.status(500).json({ error: error.response?.data || error.message });
+        console.error("Customer API error:", error);
+
+        res.status(500).json({
+            message: "Failed to fetch customers",
+            error: error?.error?.message || error.message || error
+        });
+    }
+};
+
+export const getCustomersForUserManagement = async (req, res) => {
+    try {
+        const { userId } = req.query;
+
+        const oauthUser = await oauth_user_model.findOne({ userId });
+        if (!oauthUser) {
+            return res.status(404).json({ error: "OAuth user not found." });
+        }
+
+        const accessToken = await refreshAccessToken(oauthUser);
+
+        // Step 1: get IDs (from DB or API)
+        const customerIds = oauthUser.customerIds || [];
+
+        if (!customerIds.length) {
+            return res.json({ customers: [] });
+        }
+
+        let customers = [];
+
+        // Step 2: fetch names (same as your dropdown logic)
+        for (const cid of customerIds) {
+            try {
+                const list = await fetchCustomerNames(accessToken, cid);
+
+                if (list.length) {
+                    list.forEach(c => {
+                        customers.push({
+                            id: c.id,
+                            name: c.name
+                        });
+                    });
+                } else {
+                    customers.push({
+                        id: cid,
+                        name: `Customer ${cid}`
+                    });
+                }
+
+            } catch (e) {
+                customers.push({
+                    id: cid,
+                    name: `Customer ${cid}`
+                });
+            }
+        }
+
+        res.json({ customers });
+
+    } catch (err) {
+        console.error("Customer fetch error:", err);
+        res.status(500).json({ error: err.message });
     }
 };
 
@@ -326,13 +498,6 @@ export const getAds = async (req, res) => {
     }
 };
 
-// ══════════════════════════════════════════════════════════════
-//  USER ACCESS ROLE MANAGEMENT
-//  Each oauth_user document has an accessRoles array:
-//  [{ adminId, role, grantedAt }]
-//  Roles: "viewer" | "editor" | "owner"
-// ══════════════════════════════════════════════════════════════
-
 // ── GET /auth/accounts/:id/access — list who has access ──────────────────────
 
 export const getAccountAccess = async (req, res) => {
@@ -361,31 +526,6 @@ export const getAccountAccess = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
-// ── GET /auth/admin-list — all admin users (for the grant-access dropdown) ────
-
-// export const getAdminList = async (req, res) => {
-//     try {
-//         const admins = await admin_model.find({}).select("_id email fullname role");
-
-//         const final_user = await Promise.all(
-//             admins.map(async ({ _id, email, fullname, role: roleSlug }) => {
-//                 const curr_role = await role.findOne({ role_slug: roleSlug });
-
-//                 return {
-//                     id: _id,
-//                     email,
-//                     name: fullname,
-//                     role: curr_role?.role_name || null
-//                 };
-//             })
-//         );
-
-//         res.json({ final_user });
-//     } catch (error) {
-//         res.status(500).json({ error: error.message });
-//     }
-// };
 
 export const getAdminList = async (req, res) => {
     try {
@@ -785,8 +925,12 @@ export const getAccessMatrix = async (req, res) => {
         const admins = await admin_model.find({})
             .select("_id email fullname accessUserIds role");
 
-        const oauthUsers = await oauth_user_model.find({})
-            .select("userId googleEmail googleName");
+        const oauthUsers = await oauth_user_model.find({}).select("userId googleEmail googleName customerIds");
+
+        oauthUsers.map(u => ({
+            ...u.toObject(),
+            customers: u.customerIds || []
+        }))
 
         res.json({
             admins,
@@ -842,5 +986,42 @@ export const bulkAssignAccess = async (req, res) => {
 
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+};
+
+export const toggleChildAccess = async (req, res) => {
+    try {
+        const { adminId, userId, checked } = req.body;
+
+        if (!adminId || !userId) {
+            return res.status(400).json({ message: "adminId and userId required" });
+        }
+
+        if (checked) {
+            // ADD child
+            await admin_model.updateOne(
+                { _id: adminId },
+                { $addToSet: { accessUserIds: userId } }
+            );
+        } else {
+            // REMOVE child
+            await admin_model.updateOne(
+                { _id: adminId },
+                { $pull: { accessUserIds: userId } }
+            );
+        }
+
+        return res.json({
+            success: true,
+            adminId,
+            userId,
+            checked
+        });
+
+    } catch (err) {
+        return res.status(500).json({
+            success: false,
+            message: err.message
+        });
     }
 };
