@@ -237,7 +237,6 @@ export const getCustomerIds = async (req, res) => {
     try {
         const { userId } = req.query;
 
-        // 🔥 get logged in admin
         const admin = await admin_model.findById(req.sessionAdmin.id);
 
         const oauthUser = await oauth_user_model.findOne({ userId });
@@ -247,18 +246,23 @@ export const getCustomerIds = async (req, res) => {
 
         const accessToken = await refreshAccessToken(oauthUser);
 
-        // Step 1: get customer IDs
-        const customerIds = await fetchCustomerIds(accessToken);
+        // 1. Google API customers
+        const googleCustomerIds = await fetchCustomerIds(accessToken);
 
-        // fallback if API fails
-        const finalIds = customerIds.length ? customerIds : (oauthUser.customerIds || []);
+        // 2. Allowed DB customers (ONLY for this oauthUser)
+        const dbCustomerIds =
+            (admin.customerAccess || [])
+                .filter(x => x.userId === userId)
+                .flatMap(x => x.customerIds);
+
+        // 3. INTERSECTION (MOST IMPORTANT FIX)
+        const finalIds = googleCustomerIds.filter(id =>
+            dbCustomerIds.includes(id)
+        );
 
         if (!finalIds.length) {
             return res.json({ customers: [] });
         }
-
-        // Step 2: fetch names
-        //const customers = await fetchCustomerNames(accessToken, finalIds[0]);
 
         let customers = [];
 
@@ -266,48 +270,33 @@ export const getCustomerIds = async (req, res) => {
             try {
                 const list = await fetchCustomerNames(accessToken, cid);
 
-                if (list.length) {
-                    list.forEach(c => {
-                        customers.push({
-                            id: c.id,
-                            name: c.name,
-                            status: "success"
-                        });
-                    });
-                } else {
-                    customers.push({
-                        id: cid,
-                        name: null,
-                        status: "empty"
-                    });
-                }
+                const found = list.find(c => c.id === cid);
+
+                customers.push({
+                    id: cid,
+                    name: found?.name || `Customer ${cid}`,
+                    status: "success"
+                });
 
             } catch (e) {
                 customers.push({
                     id: cid,
-                    name: null,
+                    name: `Customer ${cid}`,
                     status: "error",
-                    error: e?.error?.message || e?.message || "Unknown error"
+                    error:
+                        e?.error?.message ||
+                        e?.message ||
+                        JSON.stringify(e) ||
+                        "Google API error"
                 });
             }
-        }
-
-        // optional: save IDs
-        if (customerIds.length) {
-            await oauth_user_model.updateOne(
-                { _id: oauthUser._id },
-                { customerIds }
-            );
         }
 
         res.json({ customers });
 
     } catch (error) {
-        console.error("Customer API error:", error);
-
         res.status(500).json({
-            message: "Failed to fetch customers",
-            error: error?.error?.message || error.message || error
+            error: error.message || "Failed to fetch customers"
         });
     }
 };
@@ -369,21 +358,44 @@ export const getCustomersForUserManagement = async (req, res) => {
 
 // ── GET /auth/accounts ────────────────────────────────────────────────────────
 
+// export const getAccounts = async (req, res) => {
+//     try {
+
+//         const admin = await admin_model.findById(req.sessionAdmin.id);
+
+//         let query = {};
+
+//         if (admin.role !== "super_admin") {
+//             query = {
+//                 userId: { $in: admin.accessUserIds || [] }
+//             };
+//         }
+
+//         const accounts = await oauth_user_model
+//             .find(query)
+//             .sort({ created: -1 });
+
+//         res.json({ accounts });
+
+//     } catch (err) {
+//         res.status(500).json({ error: err.message });
+//     }
+// };
+
 export const getAccounts = async (req, res) => {
     try {
 
         const admin = await admin_model.findById(req.sessionAdmin.id);
 
-        let query = {};
+        // ✅ NEW LINE (this is what you were asking about)
+        const allowedUserIds = (admin.customerAccess || []).map(x => x.userId);
 
-        if (admin.role !== "super_admin") {
-            query = {
-                userId: { $in: admin.accessUserIds || [] }
-            };
+        if (!allowedUserIds.length) {
+            return res.json({ accounts: [] });
         }
 
         const accounts = await oauth_user_model
-            .find(query)
+            .find({ userId: { $in: allowedUserIds } })
             .sort({ created: -1 });
 
         res.json({ accounts });
@@ -482,11 +494,26 @@ export const getAds = async (req, res) => {
             }
         );
 
+        if (!response.data.results || response.data.results.length === 0) {
+            return res.json({
+                results: [],
+                status: "empty"
+            });
+        }
+
         res.json(response.data);
     } catch (error) {
-        const error_data = error.response.data.error.details;
+        console.error("Google Ads API ERROR:", error.response?.data || error.message);
 
-        const formattedErrors = error_data.flatMap((detail, i) =>
+        const googleError =
+            error.response?.data?.error?.message ||
+            error.message ||
+            "Google Ads API error";
+
+        const details =
+            error.response?.data?.error?.details || [];
+
+        const formattedErrors = details.flatMap((detail, i) =>
             detail.errors?.map((err, j) => ({
                 detailIndex: i,
                 errorIndex: j,
@@ -495,7 +522,7 @@ export const getAds = async (req, res) => {
         );
 
         res.status(500).json({
-            message: "Google Ads API Error",
+            message: googleError,
             errors: formattedErrors
         });
     }
