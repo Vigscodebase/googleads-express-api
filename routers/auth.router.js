@@ -25,7 +25,7 @@ import {
     getAccessMatrix,
     toggleAccess,
     getCustomersForUserManagement,
-    toggleChildAccess
+    toggleCustomerAccess
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -68,6 +68,6 @@ tokenrout.get("/get-oauth-name/", requireLogin, getUseridName)
 tokenrout.get("/access-matrix", requireLogin, getAccessMatrix);
 tokenrout.post("/oauth/toggle-access", requireLogin, jsonParser, toggleAccess);
 tokenrout.get("/customers-lite", requireLogin, getCustomersForUserManagement);
-//tokenrout.post("/oauth/toggle-access", requireLogin, jsonParser, toggleChildAccess);
+tokenrout.post("/oauth/toggle-customer-access", requireLogin, jsonParser, toggleCustomerAccess);
 
 export default tokenrout;

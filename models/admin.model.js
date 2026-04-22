@@ -28,6 +28,12 @@ const adminSchema = new Schema(
             type: [String],
             default: []
         },
+        customerAccess: [
+            {
+                userId: String,             // parent (oauth user)
+                customerIds: [String]       // child checkboxes
+            }
+        ],
         // Active session tokens for this admin user
         sessions: [
             {

@@ -237,6 +237,9 @@ export const getCustomerIds = async (req, res) => {
     try {
         const { userId } = req.query;
 
+        // 🔥 get logged in admin
+        const admin = await admin_model.findById(req.sessionAdmin.id);
+
         const oauthUser = await oauth_user_model.findOne({ userId });
         if (!oauthUser) {
             return res.status(404).json({ error: "OAuth user not found." });
@@ -726,6 +729,7 @@ export const getSingleUser = async (req, res) => {
 
         const usr_ID = req.params.usr_ID;
         const sing_usr = await admin_model.findOne({ _id: usr_ID })
+            .select("fullname email role accessUserIds customerAccess");
 
         if (sing_usr) {
             res.status(200).json({
@@ -946,10 +950,6 @@ export const toggleAccess = async (req, res) => {
     try {
         const { adminId, userId, enable } = req.body;
 
-        // if (req.user.role !== "super_admin") {
-        //     return res.status(403).json({ error: "Only super admin allowed" });
-        // }
-
         if (enable) {
             await admin_model.updateOne(
                 { _id: adminId },
@@ -958,7 +958,17 @@ export const toggleAccess = async (req, res) => {
         } else {
             await admin_model.updateOne(
                 { _id: adminId },
-                { $pull: { accessUserIds: userId } }
+                {
+                    $pull: { accessUserIds: userId }
+                }
+            );
+
+            // 🔥 REMOVE ALL CHILD ACCESS ALSO
+            await admin_model.updateOne(
+                { _id: adminId },
+                {
+                    $pull: { customerAccess: { userId: userId } }
+                }
             );
         }
 
@@ -989,39 +999,66 @@ export const bulkAssignAccess = async (req, res) => {
     }
 };
 
-export const toggleChildAccess = async (req, res) => {
+export const toggleCustomerAccess = async (req, res) => {
     try {
-        const { adminId, userId, checked } = req.body;
+        const { adminId, userId, customerId, checked } = req.body;
 
-        if (!adminId || !userId) {
-            return res.status(400).json({ message: "adminId and userId required" });
+        if (!adminId || !userId || !customerId) {
+            return res.status(400).json({ message: "Missing fields" });
         }
+
+        const admin = await admin_model.findById(adminId);
+
+        if (!admin) {
+            return res.status(404).json({ message: "Admin not found" });
+        }
+
+        let entry = admin.customerAccess.find(e => e.userId === userId);
 
         if (checked) {
-            // ADD child
-            await admin_model.updateOne(
-                { _id: adminId },
-                { $addToSet: { accessUserIds: userId } }
-            );
-        } else {
-            // REMOVE child
-            await admin_model.updateOne(
-                { _id: adminId },
-                { $pull: { accessUserIds: userId } }
-            );
-        }
+            // ✅ ADD FLOW
+            if (!entry) {
+                admin.customerAccess.push({
+                    userId,
+                    customerIds: [customerId]
+                });
+            } else {
+                if (!entry.customerIds.includes(customerId)) {
+                    entry.customerIds.push(customerId);
+                }
+            }
 
-        return res.json({
-            success: true,
-            adminId,
-            userId,
-            checked
-        });
+            // ✅ ENSURE parent exists
+            if (!admin.accessUserIds.includes(userId)) {
+                admin.accessUserIds.push(userId);
+            }
+
+        } else {
+            // ❌ REMOVE FLOW
+            if (entry) {
+                entry.customerIds = entry.customerIds.filter(id => id !== customerId);
+
+                // 🔥 If NO customers left → FULL CLEANUP
+                if (entry.customerIds.length === 0) {
+                    // remove from customerAccess
+                    admin.customerAccess = admin.customerAccess.filter(
+                        e => e.userId !== userId
+                    );
+
+                    // 🚀 ALSO remove from accessUserIds
+                    admin.accessUserIds = admin.accessUserIds.filter(
+                        id => id !== userId
+                    );
+                }
+            }
+        }
+        // 🔥 CLEAN INVALID CHILD IDS FROM accessUserIds
+        admin.accessUserIds = admin.accessUserIds.filter(id => id.startsWith("user_"));
+        await admin.save();
+
+        res.json({ success: true });
 
     } catch (err) {
-        return res.status(500).json({
-            success: false,
-            message: err.message
-        });
+        res.status(500).json({ error: err.message });
     }
 };
