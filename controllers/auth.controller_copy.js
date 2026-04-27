@@ -45,6 +45,18 @@ async function fetchCustomerIds(accessToken) {
     }
 }
 
+// async function fetchGoogleProfile(accessToken) {
+//     try {
+//         const profileRes = await axios.get(
+//             "https://www.googleapis.com/oauth2/v2/userinfo",
+//             { headers: { Authorization: `Bearer ${accessToken}` } }
+//         );
+//         return { email: profileRes.data.email || null, name: profileRes.data.name || null };
+//     } catch {
+//         return { email: null, name: null };
+//     }
+// }
+
 async function fetchGoogleProfile(accessToken) {
     const res = await axios.get(
         "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -54,10 +66,14 @@ async function fetchGoogleProfile(accessToken) {
             },
         }
     );
+
     return res.data;
 }
 
 // ── Build GAQL date condition from query params ───────────────────────────────
+// Accepts: dateRange = "LAST_7_DAYS" | "LAST_30_DAYS" | "LAST_90_DAYS" | "TODAY" | "custom"
+//          startDate / endDate = "YYYY-MM-DD" (only when dateRange=custom)
+
 function buildDateCondition(dateRange, startDate, endDate) {
     if (dateRange === "custom" && startDate && endDate) {
         return `segments.date BETWEEN '${startDate}' AND '${endDate}'`;
@@ -70,47 +86,31 @@ function buildDateCondition(dateRange, startDate, endDate) {
 async function handleGoogleOAuthSuccess(profile) {
     try {
         const adminEmail = profile.email;
-        const oauthUser = await oauth_user_model.findOne({ googleEmail: adminEmail });
-        if (!oauthUser) { console.log("❌ No oauth user found"); return; }
+
+        // Step 1: find oauth user
+        const oauthUser = await oauth_user_model.findOne({
+            googleEmail: adminEmail
+        });
+
+        if (!oauthUser) {
+            console.log("❌ No oauth user found");
+            return;
+        }
+
+        // Step 2: attach to admin (append safely)
         await admin_model.updateOne(
             { email: adminEmail },
-            { $addToSet: { oauthUserIds: oauthUser.userId } }
-        );
-        console.log("✅ OAuth user linked successfully");
-    } catch (err) {
-        console.error(err);
-    }
-}
-
-async function fetchCustomerNames(accessToken, loginCustomerId) {
-    try {
-        const query = `
-            SELECT
-                customer_client.id,
-                customer_client.descriptive_name,
-                customer_client.level,
-                customer_client.manager
-            FROM customer_client
-            WHERE customer_client.level <= 1
-        `;
-        const response = await axios.post(
-            `https://googleads.googleapis.com/v23/customers/${loginCustomerId}/googleAds:search`,
-            { query },
             {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
-                    "login-customer-id": loginCustomerId
-                },
+                $addToSet: {
+                    oauthUserIds: oauthUser.userId
+                }
             }
         );
-        return response.data.results.map(r => ({
-            id: r.customerClient.id,
-            name: r.customerClient.descriptiveName || `Customer ${r.customerClient.id}`
-        }));
+
+        console.log("✅ OAuth user linked successfully");
+
     } catch (err) {
-        console.warn("fetchCustomerNames error:", err.response?.data || err.message);
-        throw err.response?.data || { message: err.message };
+        console.error(err);
     }
 }
 
@@ -133,19 +133,21 @@ export const exchangeShortToken = async (req, res) => {
         );
 
         const { access_token, refresh_token } = tokenRes.data;
+        //const userId = "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
+
+        let existingUser = await oauth_user_model.findOne({ googleEmail: profile.email });
+
+        const userId = existingUser?.userId ||
+            "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
 
         const [profile, customerIds] = await Promise.all([
             fetchGoogleProfile(access_token),
             fetchCustomerIds(access_token),
         ]);
 
-        await handleGoogleOAuthSuccess(profile);
+        await handleGoogleOAuthSuccess(profile)
 
         const { email: googleEmail, name: googleName } = profile;
-
-        let existingUser = await oauth_user_model.findOne({ googleEmail });
-        const userId = existingUser?.userId ||
-            "user_" + Date.now() + "_" + crypto.randomBytes(4).toString("hex");
 
         if (googleEmail) {
             await oauth_user_model.findOneAndUpdate(
@@ -176,40 +178,60 @@ export const getStaticUser = async (req, res) => {
     }
 };
 
-// ── GET /auth/accounts ────────────────────────────────────────────────────────
-// Super admin → returns ALL oauth accounts (no filter)
-// Regular admin → only accounts from their customerAccess list
+// ── GET /auth/customers ───────────────────────────────────────────────────────
 
-export const getAccounts = async (req, res) => {
+// export const getCustomerIds = async (req, res) => {
+//     try {
+//         const { userId } = req.query;
+//         const oauthUser = await oauth_user_model.findOne({ userId });
+//         if (!oauthUser) return res.status(404).json({ error: "OAuth user not found." });
+
+//         const accessToken = await refreshAccessToken(oauthUser);
+//         const customerIds = await fetchCustomerIds(accessToken);
+//         if (customerIds.length) {
+//             await oauth_user_model.updateOne({ _id: oauthUser._id }, { customerIds });
+//         }
+//         res.json({ customerIds: customerIds.length ? customerIds : oauthUser.customerIds });
+//     } catch (error) {
+//         res.status(500).json({ error: error.response?.data || error.message });
+//     }
+// };
+
+async function fetchCustomerNames(accessToken, loginCustomerId) {
     try {
-        const admin = await admin_model.findById(req.sessionAdmin.id);
+        const query = `
+            SELECT
+                customer_client.id,
+                customer_client.descriptive_name,
+                customer_client.level,
+                customer_client.manager
+            FROM customer_client
+            WHERE customer_client.level <= 1
+        `;
 
-        // ✅ SUPER ADMIN: global access — return every connected Google account
-        if (admin.role === "super_admin") {
-            const accounts = await oauth_user_model.find({}).sort({ created: -1 });
-            return res.json({ accounts });
-        }
+        const response = await axios.post(
+            `https://googleads.googleapis.com/v23/customers/${loginCustomerId}/googleAds:search`,
+            { query },
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "developer-token": process.env.GOOGLE_DEVELOPER_TOKEN,
+                    "login-customer-id": loginCustomerId
+                },
+            }
+        );
 
-        // Regular admin: filter by their assigned customerAccess
-        const allowedUserIds = (admin.customerAccess || []).map(x => x.userId);
-        if (!allowedUserIds.length) {
-            return res.json({ accounts: [] });
-        }
-
-        const accounts = await oauth_user_model
-            .find({ userId: { $in: allowedUserIds } })
-            .sort({ created: -1 });
-
-        res.json({ accounts });
+        return response.data.results.map(r => ({
+            id: r.customerClient.id,
+            name: r.customerClient.descriptiveName || `Customer ${r.customerClient.id}`
+        }));
 
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.warn("fetchCustomerNames error:", err.response?.data || err.message);
+        // ✅ THROW instead of hiding
+        throw err.response?.data || { message: err.message };
     }
-};
-
-// ── GET /auth/customers ───────────────────────────────────────────────────────
-// Regular admin → intersection of Google API customers with their DB customerAccess
-// Super admin → all customers from Google API (no intersection filter)
+}
 
 export const getCustomerIds = async (req, res) => {
     try {
@@ -223,44 +245,49 @@ export const getCustomerIds = async (req, res) => {
         }
 
         const accessToken = await refreshAccessToken(oauthUser);
+
+        // 1. Google API customers
         const googleCustomerIds = await fetchCustomerIds(accessToken);
 
-        let finalIds;
+        // 2. Allowed DB customers (ONLY for this oauthUser)
+        const dbCustomerIds =
+            (admin.customerAccess || [])
+                .filter(x => x.userId === userId)
+                .flatMap(x => x.customerIds);
 
-        if (admin.role === "super_admin") {
-            // ✅ SUPER ADMIN: use all customer IDs Google returns — no DB intersection
-            // finalIds = googleCustomerIds.length ? googleCustomerIds : (oauthUser.customerIds || []);
-            finalIds = googleCustomerIds.length ? googleCustomerIds : ([]);
-        } else {
-            // Regular admin: intersect with their allowed customerAccess
-            const dbCustomerIds =
-                (admin.customerAccess || [])
-                    .filter(x => x.userId === userId)
-                    .flatMap(x => x.customerIds);
-
-            finalIds = googleCustomerIds.filter(id => dbCustomerIds.includes(id));
-        }
+        // 3. INTERSECTION (MOST IMPORTANT FIX)
+        const finalIds = googleCustomerIds.filter(id =>
+            dbCustomerIds.includes(id)
+        );
 
         if (!finalIds.length) {
             return res.json({ customers: [] });
         }
 
-        const customers = [];
+        let customers = [];
+
         for (const cid of finalIds) {
             try {
                 const list = await fetchCustomerNames(accessToken, cid);
+
                 const found = list.find(c => c.id === cid);
+
                 customers.push({
                     id: cid,
                     name: found?.name || `Customer ${cid}`,
                     status: "success"
                 });
+
             } catch (e) {
                 customers.push({
                     id: cid,
                     name: `Customer ${cid}`,
                     status: "error",
-                    error: e?.error?.message || e?.message || JSON.stringify(e) || "Google API error"
+                    error:
+                        e?.error?.message ||
+                        e?.message ||
+                        JSON.stringify(e) ||
+                        "Google API error"
                 });
             }
         }
@@ -268,68 +295,9 @@ export const getCustomerIds = async (req, res) => {
         res.json({ customers });
 
     } catch (error) {
-        res.status(500).json({ error: error.message || "Failed to fetch customers" });
-    }
-};
-
-// ── GET /auth/customers-all ───────────────────────────────────────────────────
-// Super admin exclusive: returns ALL customers for a userId directly from
-// oauthUser.customerIds (stored during OAuth), with names fetched from Google.
-// Bypasses customerAccess entirely — used by adminview page.
-
-export const getAllCustomersForSuperAdmin = async (req, res) => {
-    try {
-        const { userId } = req.query;
-
-        const admin = await admin_model.findById(req.sessionAdmin.id);
-
-        // Guard: only super_admin can call this endpoint
-        if (admin.role !== "super_admin") {
-            return res.status(403).json({ error: "Access denied. Super admin only." });
-        }
-
-        const oauthUser = await oauth_user_model.findOne({ userId });
-        if (!oauthUser) {
-            return res.status(404).json({ error: "OAuth user not found." });
-        }
-
-        const accessToken = await refreshAccessToken(oauthUser);
-
-        // Use freshly fetched Google IDs, fallback to stored customerIds
-        let customerIds = await fetchCustomerIds(accessToken);
-        if (!customerIds.length) {
-            customerIds = oauthUser.customerIds || [];
-        }
-
-        if (!customerIds.length) {
-            return res.json({ customers: [] });
-        }
-
-        const customers = [];
-        for (const cid of customerIds) {
-            try {
-                const list = await fetchCustomerNames(accessToken, cid);
-                const found = list.find(c => c.id === cid);
-                customers.push({
-                    id: cid,
-                    name: found?.name || `Customer ${cid}`,
-                    status: "success"
-                });
-            } catch (e) {
-                customers.push({
-                    id: cid,
-                    name: `Customer ${cid}`,
-                    status: "error",
-                    error: e?.error?.message || e?.message || "Google API error"
-                });
-            }
-        }
-
-        res.json({ customers });
-
-    } catch (err) {
-        console.error("getAllCustomersForSuperAdmin error:", err);
-        res.status(500).json({ error: err.message || "Failed to fetch customers" });
+        res.status(500).json({
+            error: error.message || "Failed to fetch customers"
+        });
     }
 };
 
@@ -343,24 +311,40 @@ export const getCustomersForUserManagement = async (req, res) => {
         }
 
         const accessToken = await refreshAccessToken(oauthUser);
-        //const customerIds = oauthUser.customerIds || [];
-        const customerIds = await fetchCustomerIds(accessToken);
+
+        // Step 1: get IDs (from DB or API)
+        const customerIds = oauthUser.customerIds || [];
 
         if (!customerIds.length) {
             return res.json({ customers: [] });
         }
 
-        const customers = [];
+        let customers = [];
+
+        // Step 2: fetch names (same as your dropdown logic)
         for (const cid of customerIds) {
             try {
                 const list = await fetchCustomerNames(accessToken, cid);
+
                 if (list.length) {
-                    list.forEach(c => customers.push({ id: c.id, name: c.name }));
+                    list.forEach(c => {
+                        customers.push({
+                            id: c.id,
+                            name: c.name
+                        });
+                    });
                 } else {
-                    customers.push({ id: cid, name: `Customer ${cid}` });
+                    customers.push({
+                        id: cid,
+                        name: `Customer ${cid}`
+                    });
                 }
+
             } catch (e) {
-                customers.push({ id: cid, name: `Customer ${cid}` });
+                customers.push({
+                    id: cid,
+                    name: `Customer ${cid}`
+                });
             }
         }
 
@@ -368,6 +352,55 @@ export const getCustomersForUserManagement = async (req, res) => {
 
     } catch (err) {
         console.error("Customer fetch error:", err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ── GET /auth/accounts ────────────────────────────────────────────────────────
+
+// export const getAccounts = async (req, res) => {
+//     try {
+
+//         const admin = await admin_model.findById(req.sessionAdmin.id);
+
+//         let query = {};
+
+//         if (admin.role !== "super_admin") {
+//             query = {
+//                 userId: { $in: admin.accessUserIds || [] }
+//             };
+//         }
+
+//         const accounts = await oauth_user_model
+//             .find(query)
+//             .sort({ created: -1 });
+
+//         res.json({ accounts });
+
+//     } catch (err) {
+//         res.status(500).json({ error: err.message });
+//     }
+// };
+
+export const getAccounts = async (req, res) => {
+    try {
+
+        const admin = await admin_model.findById(req.sessionAdmin.id);
+
+        // ✅ NEW LINE (this is what you were asking about)
+        const allowedUserIds = (admin.customerAccess || []).map(x => x.userId);
+
+        if (!allowedUserIds.length) {
+            return res.json({ accounts: [] });
+        }
+
+        const accounts = await oauth_user_model
+            .find({ userId: { $in: allowedUserIds } })
+            .sort({ created: -1 });
+
+        res.json({ accounts });
+
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
@@ -396,9 +429,11 @@ export const refreshAccountToken = async (req, res) => {
         const customerIds = await fetchCustomerIds(newAccessToken);
         const updateFields = {};
         if (customerIds.length) updateFields.customerIds = customerIds;
-
         const profile = await fetchGoogleProfile(newAccessToken);
+        console.log(profile)
         if (!oauthUser.googleEmail || !oauthUser.googleName) {
+            const profile = await fetchGoogleProfile(newAccessToken);
+            console.log(profile)
             if (profile.email) updateFields.googleEmail = profile.email;
             if (profile.name) updateFields.googleName = profile.name;
         }
@@ -413,7 +448,13 @@ export const refreshAccountToken = async (req, res) => {
     }
 };
 
-// ── GET /auth/ads-listing ─────────────────────────────────────────────────────
+// ── GET /auth/ads-listing — NOW WITH DATE RANGE ───────────────────────────────
+// Query params:
+//   userId, customerId   — required
+//   dateRange            — "LAST_30_DAYS" (default) | "TODAY" | "LAST_7_DAYS" |
+//                          "LAST_14_DAYS" | "LAST_90_DAYS" | "THIS_MONTH" |
+//                          "LAST_MONTH" | "custom"
+//   startDate, endDate   — "YYYY-MM-DD", required when dateRange="custom"
 
 export const getAds = async (req, res) => {
     try {
@@ -454,22 +495,40 @@ export const getAds = async (req, res) => {
         );
 
         if (!response.data.results || response.data.results.length === 0) {
-            return res.json({ results: [], status: "empty" });
+            return res.json({
+                results: [],
+                status: "empty"
+            });
         }
 
         res.json(response.data);
     } catch (error) {
         console.error("Google Ads API ERROR:", error.response?.data || error.message);
-        const googleError = error.response?.data?.error?.message || error.message || "Google Ads API error";
-        const details = error.response?.data?.error?.details || [];
+
+        const googleError =
+            error.response?.data?.error?.message ||
+            error.message ||
+            "Google Ads API error";
+
+        const details =
+            error.response?.data?.error?.details || [];
+
         const formattedErrors = details.flatMap((detail, i) =>
-            detail.errors?.map((err, j) => ({ detailIndex: i, errorIndex: j, error: err })) || []
+            detail.errors?.map((err, j) => ({
+                detailIndex: i,
+                errorIndex: j,
+                error: err
+            })) || []
         );
-        res.status(500).json({ message: googleError, errors: formattedErrors });
+
+        res.status(500).json({
+            message: googleError,
+            errors: formattedErrors
+        });
     }
 };
 
-// ── GET /auth/accounts/:id/access ────────────────────────────────────────────
+// ── GET /auth/accounts/:id/access — list who has access ──────────────────────
 
 export const getAccountAccess = async (req, res) => {
     try {
@@ -505,17 +564,26 @@ export const getAdminList = async (req, res) => {
         const final_user = await Promise.all(
             admins.map(async ({ _id, email, fullname, role: roleSlug }) => {
                 const curr_role = await role.findOne({ role_slug: roleSlug });
-                return { _id, email, fullname, role: curr_role?.role_name || null };
+
+                return {
+                    _id,
+                    email,
+                    fullname,
+                    role: curr_role?.role_name || null
+                };
             })
         );
 
+        // ✅ FIXED RESPONSE KEY
         res.json({ admins: final_user });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 };
 
-// ── POST /auth/accounts/:id/access ───────────────────────────────────────────
+// ── POST /auth/accounts/:id/access — grant access ────────────────────────────
+// Body: { adminId, role }   role = "viewer" | "editor" | "owner"
 
 export const grantAccountAccess = async (req, res) => {
     try {
@@ -527,13 +595,18 @@ export const grantAccountAccess = async (req, res) => {
         const validRoles = ["viewer", "editor", "owner"];
         if (!validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Must be one of: ${validRoles.join(", ")}` });
 
+        // Check admin exists
         const admin = await admin_model.findById(adminId);
         if (!admin) return res.status(404).json({ error: "Admin user not found." });
 
+        // Upsert the role (update if already exists, add if not)
         const account = await oauth_user_model.findById(id);
         if (!account) return res.status(404).json({ error: "Account not found." });
 
-        const existingIdx = account.accessRoles.findIndex(r => r.adminId?.toString() === adminId.toString());
+        const existingIdx = account.accessRoles.findIndex(
+            r => r.adminId?.toString() === adminId.toString()
+        );
+
         if (existingIdx >= 0) {
             account.accessRoles[existingIdx].role = role;
             account.accessRoles[existingIdx].grantedAt = new Date();
@@ -548,7 +621,7 @@ export const grantAccountAccess = async (req, res) => {
     }
 };
 
-// ── DELETE /auth/accounts/:id/access/:adminId ────────────────────────────────
+// ── DELETE /auth/accounts/:id/access/:adminId — revoke access ────────────────
 
 export const revokeAccountAccess = async (req, res) => {
     try {
@@ -558,7 +631,9 @@ export const revokeAccountAccess = async (req, res) => {
         if (!account) return res.status(404).json({ error: "Account not found." });
 
         const before = account.accessRoles.length;
-        account.accessRoles = account.accessRoles.filter(r => r.adminId?.toString() !== adminId.toString());
+        account.accessRoles = account.accessRoles.filter(
+            r => r.adminId?.toString() !== adminId.toString()
+        );
 
         if (account.accessRoles.length === before) {
             return res.status(404).json({ error: "Access entry not found." });
@@ -574,27 +649,44 @@ export const revokeAccountAccess = async (req, res) => {
 export const createUsers = async (req, res) => {
     try {
         const { name, email, password, role } = req.body;
+
         const saltRounds = 10;
 
         bcrypt.hash(password, saltRounds, async function (err, hash) {
-            const existingUser = await admin_model.findOne({ email });
+            const usr_data = new admin_model({
+                fullname: name,
+                email: email,
+                password: hash,
+                role: role,
+            })
+
+            const existingUser = await admin_model.findOne({ email: email });
+
             if (existingUser) {
-                return res.status(400).json({ message: "User already exists" });
+                return res.status(400).json({
+                    message: "User already exists"
+                });
             }
 
-            const usr_data = new admin_model({ fullname: name, email, password: hash, role });
-            const save_usr_acc = await usr_data.save();
+            const save_usr_acc = usr_data.save();
 
             if (save_usr_acc) {
-                return res.status(201).json({ success: "New user created successfully." });
-            } else {
-                return res.status(400).json({ message: 'Something went wrong!' });
+                return res.status(201).json({
+                    success: "New user created successfully."
+                })
+
+            }
+            else {
+                return res.status(400).json({
+                    message: 'Something went wrong!'
+                })
             }
         });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
-};
+}
 
 export const updateUsr = async (req, res) => {
     try {
@@ -603,63 +695,109 @@ export const updateUsr = async (req, res) => {
         const saltRounds = 10;
 
         if (password === undefined || password === null) {
+
             const edit_usr = await admin_model.updateOne(
                 { _id: user_ID },
-                { $set: { fullname: name, email, role } }
+                {
+                    $set: {
+                        fullname: name,
+                        email: email,
+                        role: role,
+                    }
+                }
             );
+
             if (edit_usr.acknowledged) {
-                res.status(200).json({ message: "Updated user successfully" });
+                res.status(200).json({
+                    message: "Updated user successfully"
+                })
             } else {
-                res.status(400).json({ message: 'Something went wrong!' });
+                res.status(400).json({
+                    message: 'Something went wrong!'
+                })
             }
+
+
         } else {
+
             bcrypt.hash(password, saltRounds, async function (err, hash) {
                 const edit_usr = await admin_model.updateOne(
                     { _id: user_ID },
-                    { $set: { email, fullname: name, password: hash, role } }
+                    {
+                        $set: {
+                            email: email,
+                            fullname: name,
+                            password: hash,
+                            role: role,
+                        }
+                    }
                 );
+
                 if (edit_usr.acknowledged) {
-                    res.status(200).json({ message: "Updated user successfully" });
+                    res.status(200).json({
+                        message: "Updated user successfully"
+                    })
                 } else {
-                    res.status(400).json({ message: 'Something went wrong!' });
+                    res.status(400).json({
+                        message: 'Something went wrong!'
+                    })
                 }
             });
+
         }
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
-};
+}
 
 export const getSingleUser = async (req, res) => {
     try {
+
         const usr_ID = req.params.usr_ID;
         const sing_usr = await admin_model.findOne({ _id: usr_ID })
             .select("fullname email role accessUserIds customerAccess");
 
         if (sing_usr) {
-            res.status(200).json({ data: sing_usr, message: "Single user fetched successfully" });
-        } else {
-            res.status(400).json({ message: 'Something went wrong!' });
+            res.status(200).json({
+                data: sing_usr,
+                message: "Single user fetched successfully"
+            })
+        }
+        else {
+            res.status(400).json({
+                message: 'Something went wrong!'
+            })
         }
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({
+            message: error.message
+        })
     }
-};
+}
 
 export const deletUser = async (req, res) => {
     try {
+
         const usr_ID = req.params.usr_ID;
-        const delete_usr = await admin_model.deleteOne({ _id: usr_ID });
+        const delete_usr = await admin_model.deleteOne({ _id: usr_ID })
 
         if (delete_usr.acknowledged) {
-            res.status(201).json({ message: "User deleted successfully" });
-        } else {
-            res.status(400).json({ message: 'Something went wrong!' });
+            res.status(201).json({
+                message: "User deleted successfully"
+            })
+        }
+        else {
+            res.status(400).json({
+                message: 'Something went wrong!'
+            })
         }
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({
+            message: error.message
+        })
     }
-};
+}
 
 export const getCampaignDetails = async (req, res) => {
     try {
@@ -732,61 +870,104 @@ export const updateCampaign = async (req, res) => {
 export const updateAccessAccounts = async (req, res) => {
     try {
         const { accounts } = req.body;
-        await admin_model.findByIdAndUpdate(req.sessionAdmin.id, { access_account: accounts });
+
+        await Admin.findByIdAndUpdate(req.user.id, {
+            access_account: accounts
+        });
+
         res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
+// GET /api/oauth/list
 export const getOauthUserIds = async (req, res) => {
     try {
         const admin = await admin_model.findById(req.params.userId);
-        const oauthUsers = await oauth_user_model.find({ userId: { $in: admin.oauthUserIds } });
+
+        const oauthUsers = await oauth_user_model.find({
+            userId: { $in: admin.oauthUserIds }
+        });
+
         res.json({
             allUserIds: oauthUsers.map(u => u.userId),
             selectedUserIds: admin.accessUserIds || []
         });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
+// POST /api/oauth/add
 export const addAccessUser = async (req, res) => {
     try {
         const { userId, adminId } = req.body;
-        await admin_model.updateOne({ _id: adminId }, { $addToSet: { accessUserIds: userId } });
+
+        await admin_model.updateOne(
+            { _id: adminId },
+            { $addToSet: { accessUserIds: userId } }
+        );
+
         res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
+// POST /api/oauth/remove
 export const removeAccessUser = async (req, res) => {
     try {
         const { userId, adminId } = req.body;
-        await admin_model.updateOne({ _id: adminId }, { $pull: { accessUserIds: userId } });
+
+        await admin_model.updateOne(
+            { _id: adminId },
+            { $pull: { accessUserIds: userId } }
+        );
+
         res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
+// GET oauth user name according to userId
 export const getUseridName = async (req, res) => {
     try {
         const { userId } = req.query;
-        const oauth_user = await oauth_user_model.findOne({ userId }).select('googleName');
+
+        const oauth_user = await oauth_user_model.findOne({ userId: userId })
+            .select('googleName');
+
         res.json({ data: oauth_user });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
+// 🔥 NEW API → Get full matrix (admins + oauth users)
 export const getAccessMatrix = async (req, res) => {
     try {
-        const admins = await admin_model.find({}).select("_id email fullname accessUserIds role");
+        const admins = await admin_model.find({})
+            .select("_id email fullname accessUserIds role");
+
         const oauthUsers = await oauth_user_model.find({}).select("userId googleEmail googleName customerIds");
-        res.json({ admins, oauthUsers });
+
+        oauthUsers.map(u => ({
+            ...u.toObject(),
+            customers: u.customerIds || []
+        }))
+
+        res.json({
+            admins,
+            oauthUsers
+        });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -797,13 +978,29 @@ export const toggleAccess = async (req, res) => {
         const { adminId, userId, enable } = req.body;
 
         if (enable) {
-            await admin_model.updateOne({ _id: adminId }, { $addToSet: { accessUserIds: userId } });
+            await admin_model.updateOne(
+                { _id: adminId },
+                { $addToSet: { accessUserIds: userId } }
+            );
         } else {
-            await admin_model.updateOne({ _id: adminId }, { $pull: { accessUserIds: userId } });
-            await admin_model.updateOne({ _id: adminId }, { $pull: { customerAccess: { userId } } });
+            await admin_model.updateOne(
+                { _id: adminId },
+                {
+                    $pull: { accessUserIds: userId }
+                }
+            );
+
+            // 🔥 REMOVE ALL CHILD ACCESS ALSO
+            await admin_model.updateOne(
+                { _id: adminId },
+                {
+                    $pull: { customerAccess: { userId: userId } }
+                }
+            );
         }
 
         res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -813,8 +1010,7 @@ export const bulkAssignAccess = async (req, res) => {
     try {
         const { adminId, userIds } = req.body;
 
-        const admin = await admin_model.findById(req.sessionAdmin.id);
-        if (admin.role !== "super_admin") {
+        if (req.user.role !== "super_admin") {
             return res.status(403).json({ error: "Only super admin allowed" });
         }
 
@@ -824,6 +1020,7 @@ export const bulkAssignAccess = async (req, res) => {
         );
 
         res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -838,35 +1035,56 @@ export const toggleCustomerAccess = async (req, res) => {
         }
 
         const admin = await admin_model.findById(adminId);
-        if (!admin) return res.status(404).json({ message: "Admin not found" });
+
+        if (!admin) {
+            return res.status(404).json({ message: "Admin not found" });
+        }
 
         let entry = admin.customerAccess.find(e => e.userId === userId);
 
         if (checked) {
+            // ✅ ADD FLOW
             if (!entry) {
-                admin.customerAccess.push({ userId, customerIds: [customerId] });
+                admin.customerAccess.push({
+                    userId,
+                    customerIds: [customerId]
+                });
             } else {
                 if (!entry.customerIds.includes(customerId)) {
                     entry.customerIds.push(customerId);
                 }
             }
+
+            // ✅ ENSURE parent exists
             if (!admin.accessUserIds.includes(userId)) {
                 admin.accessUserIds.push(userId);
             }
+
         } else {
+            // ❌ REMOVE FLOW
             if (entry) {
                 entry.customerIds = entry.customerIds.filter(id => id !== customerId);
+
+                // 🔥 If NO customers left → FULL CLEANUP
                 if (entry.customerIds.length === 0) {
-                    admin.customerAccess = admin.customerAccess.filter(e => e.userId !== userId);
-                    admin.accessUserIds = admin.accessUserIds.filter(id => id !== userId);
+                    // remove from customerAccess
+                    admin.customerAccess = admin.customerAccess.filter(
+                        e => e.userId !== userId
+                    );
+
+                    // 🚀 ALSO remove from accessUserIds
+                    admin.accessUserIds = admin.accessUserIds.filter(
+                        id => id !== userId
+                    );
                 }
             }
         }
-
+        // 🔥 CLEAN INVALID CHILD IDS FROM accessUserIds
         admin.accessUserIds = admin.accessUserIds.filter(id => id.startsWith("user_"));
         await admin.save();
 
         res.json({ success: true });
+
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
