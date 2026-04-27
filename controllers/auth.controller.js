@@ -343,7 +343,6 @@ export const getCustomersForUserManagement = async (req, res) => {
         }
 
         const accessToken = await refreshAccessToken(oauthUser);
-        //const customerIds = oauthUser.customerIds || [];
         const customerIds = await fetchCustomerIds(accessToken);
 
         if (!customerIds.length) {
@@ -351,16 +350,30 @@ export const getCustomersForUserManagement = async (req, res) => {
         }
 
         const customers = [];
+
         for (const cid of customerIds) {
             try {
                 const list = await fetchCustomerNames(accessToken, cid);
-                if (list.length) {
-                    list.forEach(c => customers.push({ id: c.id, name: c.name }));
-                } else {
-                    customers.push({ id: cid, name: `Customer ${cid}` });
-                }
+
+                const found = list.find(c => c.id === cid);
+
+                customers.push({
+                    id: cid,
+                    name: found?.name || `Customer ${cid}`,
+                    status: "success"
+                });
+
             } catch (e) {
-                customers.push({ id: cid, name: `Customer ${cid}` });
+                customers.push({
+                    id: cid,
+                    name: `Customer ${cid}`,
+                    status: "error",
+                    error:
+                        e?.error?.message ||
+                        e?.message ||
+                        JSON.stringify(e) ||
+                        "Google API error"
+                });
             }
         }
 
@@ -368,7 +381,9 @@ export const getCustomersForUserManagement = async (req, res) => {
 
     } catch (err) {
         console.error("Customer fetch error:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({
+            error: err.message || "Failed to fetch customers"
+        });
     }
 };
 
