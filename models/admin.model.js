@@ -34,6 +34,11 @@ const adminSchema = new Schema(
                 customerIds: [String]       // child checkboxes
             }
         ],
+        // Controls whether this admin can access the Admin View page
+        canAccessAdminView: {
+            type: Boolean,
+            default: false
+        },
         // Active session tokens for this admin user
         sessions: [
             {

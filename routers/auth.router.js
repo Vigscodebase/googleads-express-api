@@ -25,7 +25,8 @@ import {
     getAccessMatrix,
     toggleAccess,
     getCustomersForUserManagement,
-    toggleCustomerAccess
+    toggleCustomerAccess,
+    toggleAdminViewAccess
 } from "../controllers/auth.controller.js";
 import { requireLogin } from "../controllers/login.controller.js";
 import bodyParser from "body-parser";
@@ -69,5 +70,6 @@ tokenrout.get("/access-matrix", requireLogin, getAccessMatrix);
 tokenrout.post("/oauth/toggle-access", requireLogin, jsonParser, toggleAccess);
 tokenrout.get("/customers-lite", requireLogin, getCustomersForUserManagement);
 tokenrout.post("/oauth/toggle-customer-access", requireLogin, jsonParser, toggleCustomerAccess);
+tokenrout.post("/toggle-adminview-access", requireLogin, jsonParser, toggleAdminViewAccess);
 
 export default tokenrout;

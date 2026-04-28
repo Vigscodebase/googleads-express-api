@@ -614,13 +614,13 @@ export const createUsers = async (req, res) => {
 export const updateUsr = async (req, res) => {
     try {
         const user_ID = req.params.usr_ID;
-        const { name, email, password, role } = req.body;
+        const { name, email, password, role, canAccessAdminView } = req.body;
         const saltRounds = 10;
 
         if (password === undefined || password === null) {
             const edit_usr = await admin_model.updateOne(
                 { _id: user_ID },
-                { $set: { fullname: name, email, role } }
+                { $set: { fullname: name, email, role, canAccessAdminView: !!canAccessAdminView } }
             );
             if (edit_usr.acknowledged) {
                 res.status(200).json({ message: "Updated user successfully" });
@@ -631,7 +631,7 @@ export const updateUsr = async (req, res) => {
             bcrypt.hash(password, saltRounds, async function (err, hash) {
                 const edit_usr = await admin_model.updateOne(
                     { _id: user_ID },
-                    { $set: { email, fullname: name, password: hash, role } }
+                    { $set: { email, fullname: name, password: hash, role, canAccessAdminView: !!canAccessAdminView } }
                 );
                 if (edit_usr.acknowledged) {
                     res.status(200).json({ message: "Updated user successfully" });
@@ -649,7 +649,7 @@ export const getSingleUser = async (req, res) => {
     try {
         const usr_ID = req.params.usr_ID;
         const sing_usr = await admin_model.findOne({ _id: usr_ID })
-            .select("fullname email role accessUserIds customerAccess");
+            .select("fullname email role accessUserIds customerAccess canAccessAdminView");
 
         if (sing_usr) {
             res.status(200).json({ data: sing_usr, message: "Single user fetched successfully" });
@@ -882,6 +882,29 @@ export const toggleCustomerAccess = async (req, res) => {
         await admin.save();
 
         res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// ── POST /auth/toggle-adminview-access ───────────────────────────────────────
+// Body: { adminId, checked }
+// Instantly saves canAccessAdminView for a given admin user.
+export const toggleAdminViewAccess = async (req, res) => {
+    try {
+        const { adminId, checked } = req.body;
+        if (!adminId) return res.status(400).json({ message: 'adminId is required' });
+
+        const result = await admin_model.updateOne(
+            { _id: adminId },
+            { $set: { canAccessAdminView: !!checked } }
+        );
+
+        if (result.acknowledged) {
+            res.status(200).json({ success: true, canAccessAdminView: !!checked });
+        } else {
+            res.status(400).json({ message: 'Update failed' });
+        }
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
