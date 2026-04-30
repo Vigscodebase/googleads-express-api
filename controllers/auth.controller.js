@@ -909,3 +909,20 @@ export const toggleAdminViewAccess = async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 };
+
+// ── GET /auth/my-permissions ──────────────────────────────────────────────────
+// Returns current logged-in admin's canAccessAdminView + role
+// Uses req.sessionAdmin.id set by requireLogin middleware
+export const getMyPermissions = async (req, res) => {
+    try {
+        const admin = await admin_model.findById(req.sessionAdmin.id)
+            .select('role canAccessAdminView');
+        if (!admin) return res.status(404).json({ error: 'Admin not found' });
+        res.json({
+            role:               admin.role,
+            canAccessAdminView: !!admin.canAccessAdminView
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
